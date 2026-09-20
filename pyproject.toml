@@ -1,0 +1,22 @@
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["build", "build_old", "build_old2", "build_old3", "build_old4", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "N"]
+ignore = [
+    "E501",    # 行长由 formatter 控制
+    "UP009",   # 保留项目统一的 utf-8 编码声明（与其他 Qt 项目保持一致）
+    "SIM105",  # try/except/pass 比 contextlib.suppress 更直观
+    "N802",    # Qt 事件处理器必须用驼峰命名
+    "N803",
+    "N806",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,14 @@
+# 行尾策略
+#
+# 仓库内一律以 LF 存储（受系统 core.autocrlf 影响，检出到 Windows 工作区时
+# 会自动转回 CRLF）。下面只钉住**不能交给自动转换**的几类。
+
+# 批处理必须是 CRLF：LF 行尾会让 cmd 的 goto / 标签跳转解析异常。
+# 注意本项目的 打包.bat 是 GBK 编码（chcp 936），改动它时别顺手转成 UTF-8。
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制：不参与行尾转换
+*.ico  binary
+*.png  binary
+*.db   binary

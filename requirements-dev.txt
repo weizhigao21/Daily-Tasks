@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# ---- 开发/测试专用（运行程序不需要）----
+pytest>=7.0
+pytest-qt>=4.2
+ruff>=0.6
+opencv-python>=4.8   # 仅用于 test_ncc_matches_opencv 交叉校验，缺失则自动跳过
+qrcode>=7.4          # 仅用于 test_qrdecode 现场生成二维码素材，缺失则自动跳过
