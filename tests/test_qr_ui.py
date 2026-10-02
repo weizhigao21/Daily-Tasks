@@ -369,7 +369,11 @@ def test_result_text_area_is_not_painted_white(result):
     """
     dlg = result(["https://example.com/abc"])
     QApplication.processEvents()
-    img = dlg.text.grab().toImage()
+    # 抓**整个对话框**再裁到文本区，不能只 grab 文本控件自己：单独抓取时
+    # 半透明 QSS 底色没有父级底板可合成，读到的是画笔原色（白色微透明叠加
+    # 会被误判成"纯白底"）。用户看到的是叠在对话框深色底板上的结果，就测那个。
+    r = dlg.text.geometry()
+    img = dlg.grab().toImage().copy(r.x(), r.y(), r.width(), r.height())
     # 必须在取色前确认真抓到了画面：0x0 图会让遍历一个点都取不到，
     # 断言就变成永远通过（本项目栽过"假绿"，这条守卫不能省）。
     assert img.width() > 8 and img.height() > 8, "没抓到文本区画面，用例会假绿"

@@ -1,5 +1,12 @@
 # 更新日志
 
+## [v0.4.2] — 2026-10-02 · 对话框无边框自绘标题栏 · 移动期黑边/纯色修复
+
+- **修复 统计 / 添加任务等对话框移动时边缘与原生标题栏变黑**：Win10 下 `SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)` 在移动期被 `glass.suspend()` 撤掉后，DWM 会把原生标题栏/非客户区画成纯黑（真机稳定复现），而且原生标题栏无法透明。所有 `GlassDialogMixin` 对话框改为 `FramelessWindowHint + WA_TranslucentBackground`，使用自绘透明标题栏（窗口名 + 关闭按钮，支持拖动），从合成层面绕开该问题。
+- **修复 移动期窗口背景塌成纯色 / 边缘黑边**：对话框背景改由 `_dialog_surface` 子控件承担；原生 Acrylic 生效时透明，降级或移动/缩放期间切到不透明动态采样色。移动前抓取的定格快照画在底板上并按 `R_PANEL` 圆角裁切，边缘不会再露黑直角，拖动全程保持静止时的玻璃观感；停手后恢复 Acrylic 与透明底板。
+- **新增自绘关闭图标**：`ui/icons.py` 增加 close 矢量图标，标题栏不再依赖字体符号。
+- **验证**：真机探针确认静态 `glass/transparent`、移动 `opaque+定格快照`、停止恢复 `glass/transparent`；全量 `pytest` 383 例通过，`ruff` 全绿。
+
 ## [v0.4.1] — 2026-10-02 · 下拉框渲染修复 · 框选/停靠/让位等 10 项交互缺陷汇总
 
 ### 下拉框箭头与弹出列表圆角

@@ -6,10 +6,10 @@ Windows 桌面悬浮任务栏：每日/每周任务管理 + **屏幕识别自动
 
 ## 界面
 
-- **原生毛玻璃**：按 Win11 22H2 `Acrylic` → Win11 21H2 `Mica` → Win10 1803+ `SetWindowCompositionAttribute` 顺序尝试，**只依赖 ctypes**、不引入第三方库；任意一步失败自动降级为自绘半透明玻璃，任何环境都有玻璃观感（主面板、任务编辑、统计面板、二维码结果窗、快捷键设置窗五处一致；托盘 / 卡片右键菜单也走同一支后端，见下）。
+- **原生毛玻璃**：按 Win11 22H2 `Acrylic` → Win11 21H2 `Mica` → Win10 1803+ `SetWindowCompositionAttribute` 顺序尝试，**只依赖 ctypes**、不引入第三方库；任意一步失败自动降级为自绘半透明玻璃，任何环境都有玻璃观感（主面板、任务编辑、统计面板、二维码结果窗、快捷键设置窗五处一致；对话框改为无边框 + 自绘透明标题栏。托盘 / 卡片右键菜单也走同一支后端，见下）。
 - **右键菜单同款观感**：菜单是**独立顶层窗口**，不在面板那棵样式树里，没人管就是系统默认浅色。托盘菜单、托盘「二维码」子菜单、卡片「更多」菜单统一走 `ui/menu.py::GlassMenu`：配色取 `theme.menu_qss()`（单一来源 `BG_MENU`），并在**每次弹出**时把主面板那套原生 Acrylic 挂到弹窗窗柄上、底板转透明。⚠️ 必须每次重挂 —— Qt 的 Popup 窗口隐藏即销毁，下次显示是新的 HWND，子菜单又是另一个弹窗；拿"已经挂过"当缓存会让菜单永远停在降级态。
 - **下拉框的箭头也是自绘的**：`QComboBox::down-arrow` 若交给样式表会画成**实心小方块**（Qt 的 QStyleSheetStyle 不实现 CSS 的 box model，「三边 border 拼三角」那套写法不成立）；而只删 `down-arrow`、留着 `::drop-down` 又会让箭头**彻底消失**（样式引擎继续接管绘制、不转发给原生 style）。两条一起删，由 `ui/combo.py::ThemedComboBox` 用 `QProxyStyle` 自绘。同一处还修了弹出列表**圆角外一圈黑色**：那是个独立顶层窗口，必须同时设 `WA_TranslucentBackground` **和** `FramelessWindowHint` 才透得出桌面。详见「已知约束」。
-- **移动窗口时自动让路**：Win10 的 `ACCENT_ENABLE_ACRYLICBLURBEHIND` 有著名的拖动迟滞（见「已知约束」），所以弹窗被移动/缩放期间会临时**撤掉** Acrylic、改由 Qt 补不透明底板顶上（**底板色在撤之前现场采样**，所以拖动前后颜色连得上），停手 260ms 后自动恢复磨砂玻璃。**不要**尝试改用 `ACCENT_ENABLE_BLURBEHIND`（软模糊）来"保住观感"——本机实测它会输出纯白且切不回来，详见「已知约束」。
+- **移动窗口时自动让路**：Win10 的 `ACCENT_ENABLE_ACRYLICBLURBEHIND` 有著名的拖动迟滞（见「已知约束」），所以主面板 / 弹窗被移动/缩放期间会临时**撤掉** Acrylic、改由 Qt 补不透明底板顶上（**底板色在撤之前现场采样**，所以拖动前后颜色连得上），停手 260ms 后自动恢复磨砂玻璃。**不要**尝试改用 `ACCENT_ENABLE_BLURBEHIND`（软模糊）来"保住观感"——本机实测它会输出纯白且切不回来，详见「已知约束」。
 - **玻璃卡片式任务行**：46px 圆角卡片（状态圆点 + 名称/周期双行 + 状态胶囊 + 完成/更多按钮），状态升级为 `待完成 / 已完成 / 验证中 / 未命中 0.xx / 已禁用` 五种语义色胶囊。
 - **设计 token 单一来源**：颜色 / 字号 / 间距 / 圆角 / 阴影全部在 `src/ui/theme.py`，禁止各页面硬编码色值；字号随屏幕 DPI 自动微调。
 - **暗底可读性**：显式 `Microsoft YaHei UI` + `PreferFullHinting`，文字层级按 WCAG AA 校准（主文字纯白、弱化文字 `#8B94A3`）。
@@ -104,7 +104,7 @@ src/
     ├── qr_result.py    # 二维码结果窗（自动复制 / 多个切换 / 打开链接）
     ├── stats_panel.py  # 统计面板
     └── version.py      # 版本号（唯一来源）
-tests/                  # pytest + pytest-qt offscreen，381 用例（含 test_theme.py 样式覆盖守卫、test_icons.py 图标字形守卫、test_menu.py 菜单观感守卫、test_stats_panel.py 表头观感守卫、test_combo.py 下拉框箭头与弹出列表守卫、test_region_picker.py 取消路径回归）
+tests/                  # pytest + pytest-qt offscreen，383 用例（含 test_theme.py 样式覆盖守卫、test_icons.py 图标字形守卫、test_menu.py 菜单观感守卫、test_stats_panel.py 表头观感守卫、test_combo.py 下拉框箭头与弹出列表守卫、test_region_picker.py 取消路径回归）
 pyproject.toml          # ruff / pytest 配置
 requirements.txt        # 运行依赖
 requirements-dev.txt    # 开发依赖
@@ -113,7 +113,7 @@ requirements-dev.txt    # 开发依赖
 ## 测试与检查
 
 ```bash
-python -m pytest tests -q     # 381 用例（含路径解析、模板生命周期、停靠状态机、遮挡探测、全屏让位判定、真实鼠标命中、毛玻璃移动期定格快照、窗口位置记忆、窗口销毁后的引用清理、二维码解码与通道顺序、链接直开与结果窗像素回归、热键解析/校验/热重载、热键录制与设置窗、扫码接线、样式表覆盖度、图标字形与渲染、标题栏版本号版式与唯一来源、弹窗菜单配色与玻璃重挂、统计面板表头底色与左对齐、下拉框箭头与弹出列表圆角、取消框选退出与 dock_y 还原回归，以及 mss 兼容层与 Qt 弃用属性/BLURBEHIND/逐像素读取/z-order 走查/Qt 隔离/控件底色/冷门符号码位/裸 QMenu/裸 QComboBox/表头宿主底色静态守卫）
+python -m pytest tests -q     # 383 用例（含路径解析、模板生命周期、停靠状态机、遮挡探测、全屏让位判定、真实鼠标命中、毛玻璃移动期定格快照、窗口位置记忆、窗口销毁后的引用清理、二维码解码与通道顺序、链接直开与结果窗像素回归、热键解析/校验/热重载、热键录制与设置窗、扫码接线、样式表覆盖度、图标字形与渲染、标题栏版本号版式与唯一来源、弹窗菜单配色与玻璃重挂、统计面板表头底色与左对齐、下拉框箭头与弹出列表圆角、取消框选退出与 dock_y 还原回归，以及 mss 兼容层与 Qt 弃用属性/BLURBEHIND/逐像素读取/z-order 走查/Qt 隔离/控件底色/冷门符号码位/裸 QMenu/裸 QComboBox/表头宿主底色静态守卫）
 python -m ruff check src tests
 ```
 
@@ -121,7 +121,7 @@ python -m ruff check src tests
 
 ## 版本
 
-当前 **v0.4.1**（下拉框箭头与弹出列表圆角修复，以及取消框选挂死、停靠垂直位置还原、验证跨午夜记错周期、全屏按屏让位、幽灵窗口误判、统计连击截断、标题日期、玻璃采样与拖动恢复、提示条 DPI/任务栏等交互缺陷修复；v0.4.0 之后的改动已全部落版，见 `CHANGELOG.md`）。**版本号唯一来源是 `src/ui/version.py`**（`config.py` 不再重复定义，避免两处漂移），发版时同步到本文件与 `CHANGELOG.md`。
+当前 **v0.4.2**（对话框无边框自绘标题栏与移动期黑边/纯色修复：统计 / 添加任务等所有 `GlassDialogMixin` 窗口在移动时不再露原生黑标题栏、边缘黑边或纯色底板，静态/移动/停止三态均与主面板玻璃观感一致；v0.4.1 之后的改动已落版，见 `CHANGELOG.md`）。**版本号唯一来源是 `src/ui/version.py`**（`config.py` 不再重复定义，避免两处漂移），发版时同步到本文件与 `CHANGELOG.md`。
 
 ## 已知约束
 
@@ -140,7 +140,7 @@ python -m ruff check src tests
 - **弹窗菜单必须自己管配色与玻璃**：菜单是**独立顶层窗口**，不在任何控件的样式树里（`QMenu` 无父级时尤其如此），没人给它 `setStyleSheet` 就是系统默认浅色。用 `src/ui/menu.py::GlassMenu`，别直接 `QMenu(`（有静态守卫拦）。两个容易漏的点：① 子菜单是**另一个独立弹窗**，`addMenu("二维码")` 建出来的是普通 QMenu，得自己 new 一个 `GlassMenu` 传进去；② Qt 的 Popup 窗口**隐藏即销毁**，下次显示是**新的 HWND**，所以原生模糊必须在**每次 `showEvent`** 重挂，不能照抄主面板的"只做一次"，也别拿 hwnd 当缓存（句柄值会被系统回收复用）。
 - **⚠️ QComboBox 有两处 QSS 管不到的地方，都收在 `src/ui/combo.py`**：① **箭头** —— 别用 `::down-arrow` 的 border 拼三角（画出来是**方块**），也别只删 down-arrow（箭头会**消失**），**两条规则必须一起删**，改由 `QProxyStyle` 自绘（裸 `QComboBox(` 有静态守卫拦）；② **弹出列表的圆角** —— 那是个**独立顶层窗口**（`QComboBoxPrivateContainer`），QSS 只画了里面 QListView 的圆角底板，容器那层矩形没人画就是**纯黑**；只设 `WA_TranslucentBackground` 不够，**必须同时给 `FramelessWindowHint`**。顺带一提：这条容器属性**能扛过 showPopup**（与 `menu.py` 的原生模糊不同，那边必须每次重挂）。
 - **QSS 接管菜单后，置灰项要自己声明颜色**：禁用态不再走系统画法，而兜底那条 `QWidget { color: #FFFFFF }` 是纯白 —— 置灰项会跟可点项长得一模一样（探针抓图确认过）。托盘里「识别到网址显示「打开链接」」在直开开启时正是置灰的，看不出来就等于这个开关读不出状态。规则：`QMenu::item:disabled { color: TEXT_MUTED }`。
-- **对话框底板两态**：`theme.dialog_qss("glass" | "opaque", bg)` 与 `GlassDialogMixin._glass_qss_mode` 一一对应，状态收敛在这一个变量上，别再加布尔量（第五轮"背景消失"就是状态漏组合造成的）。撤背景前必须**先补不透明底板并 `repaint()`**，反序会露窗口黑底。
+- **对话框底板两态与无边框标题栏**：`theme.dialog_qss("glass" | "opaque", bg)` 与 `GlassDialogMixin._glass_qss_mode` 一一对应，状态收敛在这一个变量上，别再加布尔量。对话框本身 `FramelessWindowHint + WA_TranslucentBackground`，底板由 `_dialog_surface` 子控件承担（顶层窗口不会画自己的 QSS background）；撤背景前必须**先补不透明底板并 `_repaint_surface()`**，反序会露窗口黑底。Win10 原生标题栏在撤 accent 后会被 DWM 画成纯黑，所以标题栏自绘，不要再加回系统标题栏。
 - **需要被隐藏的对话框禁用 `exec()`**：hide 会终止模态循环，模态对话框被隐藏后再显示就"自动退出"了（任务编辑框踩过）。所以任务编辑框、二维码结果窗都用 `show()` + `finished`；只有"生命周期内不会被隐藏"的对话框（统计面板、快捷键设置）才用 `exec()`
 - **移动期底板色必须现场采样、不能写死**：静止观感 = Acrylic 的 tint 叠在**模糊后的桌面**上，随壁纸变化；写死主题深色会让拖动的瞬间从"磨砂灰"跳成"纯黑"（实测 `RGB(82,61,53)` → `RGB(27,29,33)`，用户反馈"背景会变成纯黑"）。`glass.sample_surface_color()` 在**撤 Acrylic 之前**采窗口左右内侧窄竖带的中位色，`glass.warm_up_screen()`（`app.py` 启动调用）预热截屏实例——它只在"移动的第一帧"被用到，首次构造实测 44ms、复用后 12ms。
 - **屏幕采样一律"一次分区 BitBlt"，绝不逐像素**：屏幕 DC 上的 `GetPixel` 每次调用都会强制同步一次桌面合成，实测**恰好一帧**（`12.12ms`，中位=最大）——逐像素采一块 3×36 的窄带就是 108×12ms ≈ 1.3s，GUI 线程被占住，现象就是"程序卡死"。`tests/test_screen.py` 有静态守卫拦住 `GetPixel`/`SetPixel`。

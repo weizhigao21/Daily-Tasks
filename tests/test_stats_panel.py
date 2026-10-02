@@ -2,7 +2,7 @@
 """打卡统计面板的表头观感守卫。
 
 表头是 QTableView 里的**独立子控件**，不在 QTableWidget 的绘制范围内：表体那层
-`QTableWidget { background: rgba(0,0,0,0.22) }` 管不到它。而
+`QTableWidget { background: rgba(255,255,255,0.06) }` 管不到它。而
 `QHeaderView::section { background: transparent }` 一旦缺了宿主那层的
 `QHeaderView { background: transparent }`，section 透明后露出来的就是
 **QHeaderView 自己的系统调色板底色**——本机实测 `#EFEFEF`，深色玻璃面板顶上

@@ -18,7 +18,15 @@ BG_BASE_ALPHA = 0.86
 BG_TRANSIENT_ALPHA = 0.74
 BG_ELEVATED = "rgba(255, 255, 255, 0.04)"   # 卡片行底色
 BG_ELEVATED_HOVER = "rgba(255, 255, 255, 0.075)"
-BG_INPUT = "rgba(0, 0, 0, 0.28)"
+# 输入控件底色：与卡片/按钮同一套语言——白色微透明叠加，在深色底板上"亮一档"。
+# 不用深色叠加：对话框底板是**稳定的不透明深色**（见 dialog_qss：对话框没有设
+# WA_TranslucentBackground，QSS 底板 alpha 被忽略，实测恒为 BG_BASE），深色
+# 叠加只会沉到底板之下，读起来就是"黑洞"——用户反馈的"名称下面黑色背景"就是
+# v0.4.1 的组合：深色叠加 + 全透明底板（那时期底板透出系统 acrylic，随壁纸
+# 实测 RGB 40~165 漂移，暗壁纸处 0.28 黑叠加直接糊成黑块）。
+# 白色叠加实测合成正确：0.08 白叠 BG_BASE = RGB(45,47,50)，任何壁纸下都稳定
+# 亮一档，与面板卡片、按钮同一套层级语言。
+BG_INPUT = "rgba(255, 255, 255, 0.08)"
 # 弹窗表面（右键菜单 / 下拉列表 / 工具提示）。比面板底板亮一档：它们是"浮在
 # 面板之上"的一层，同色会看不出层级。原生模糊生效时这层会被替换成磨砂玻璃，
 # 见 `menu_qss()`。
@@ -85,6 +93,10 @@ PANEL_WIDTH = 392
 R_PANEL = 14
 R_CARD = 10
 R_PILL = 999
+
+# 无边框对话框自绘标题栏的高度。30~36 是常见窗口标题栏的视觉高度区间；
+# 这里取 34，既能容纳 14px 字，也给右上角按钮留出 28px 的点击区域。
+DIALOG_TITLEBAR_H = 34
 
 FONT_FAMILY = '"Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif'
 
@@ -270,12 +282,12 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTimeEdit {{
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus,
 QDoubleSpinBox:focus, QTimeEdit:focus {{
     border-color: {ACCENT};
-    background: rgba(0, 0, 0, 0.36);
+    background: rgba(255, 255, 255, 0.14);
 }}
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled,
 QDoubleSpinBox:disabled, QTimeEdit:disabled {{
     color: {TEXT_MUTED};
-    background: rgba(0, 0, 0, 0.16);
+    background: rgba(255, 255, 255, 0.04);
 }}
 /* 多行文本框单独成组。⚠️ 别把它并进上面那组就以为完事——这里是本项目栽过的坑：
    上面的 `QWidget {{ color: {TEXT_PRIMARY} }}` 是**纯白**，而 QPlainTextEdit 属于
@@ -293,7 +305,7 @@ QPlainTextEdit, QTextEdit {{
 }}
 QPlainTextEdit:focus, QTextEdit:focus {{
     border-color: {ACCENT};
-    background: rgba(0, 0, 0, 0.36);
+    background: rgba(255, 255, 255, 0.14);
 }}
 /* ⚠️ 这里**故意没有** `QComboBox::drop-down` / `QComboBox::down-arrow`，别加回来。
    原因有两层，都是真机实测出来的（详见 combo.py 模块说明）：
@@ -350,7 +362,7 @@ QDialog QLabel {{
 }}
 /* ---------- 表格 ---------- */
 QTableWidget {{
-    background: rgba(0, 0, 0, 0.22);
+    background: rgba(255, 255, 255, 0.06);
     border: 1px solid {STROKE_SOFT};
     border-radius: {R_CARD}px;
     gridline-color: transparent;
@@ -368,7 +380,7 @@ QTableWidget::item:selected {{
 /* 表头是 QTableView 里的**独立子控件**，不在 QTableWidget 的绘制范围内。
    只把 section 设成透明没用：那时露出来的是 QHeaderView 自己的**系统调色板**
    底色（本机实测 #F0F0F0），深色面板顶上就是一条刺眼的白带。宿主这层也必须
-   一起去底色，才能透到 QTableWidget 自己的 rgba(0,0,0,0.22) 上。 */
+   一起去底色，才能透到 QTableWidget 自己的白色微透明底上。 */
 QHeaderView {{
     background: transparent;
     border: none;
@@ -463,7 +475,11 @@ QToolTip {{
 def dialog_qss(mode: str = "opaque", bg_override: str | None = None) -> str:
     """对话框底板样式。两态与 `GlassDialogMixin` 的状态一一对应：
 
-    "glass"  原生硬模糊（Acrylic）已在窗口后方生效 → 底色透明，透出模糊；
+    "glass"  原生 Acrylic/Mica 已在窗口后方生效 → 底板透明，透出系统模糊。
+             对话框现在也走 frameless + WA_TranslucentBackground（与主面板、
+             菜单同一条路），所以这里的透明是**真的透明**，不再被不透明窗口
+             底色吃掉。子控件各自的白色微透明叠加仍由 app_qss 提供，文字底板
+             不会因壁纸明暗漂成黑块。
     "opaque" 原生模糊不可用、或被临时撤掉（移动中）→ 不透明底板顶上。
 
     bg_override 仅对 "opaque" 生效：移动期由 `glass.capture_window_surface()`
@@ -473,10 +489,10 @@ def dialog_qss(mode: str = "opaque", bg_override: str | None = None) -> str:
     "磨砂灰"跳成"纯黑"，这正是用户反馈的"移动的时候背景会变成纯黑"。
     它同时也是定格快照之下的兜底：万一快照没画上，窗口也不会变成透明。
 
-    为什么没有"半透明"这一档：曾经试过在移动期降级为 ACCENT_ENABLE_BLURBEHIND
-    并配半透明底板（FluentWPF 的做法），但本机实测该 accent 直接输出纯白且切不
-    回来，详见 `glass.py` 的实测记录。撤掉系统背景时底板必须是**不透明**的，
-    否则背后内容会直接透上来。
+    为什么无边框对话框要自绘标题栏：Win10 的原生标题栏 + SetWindowComposition
+    在移动期撤掉 accent 后会被 DWM 画成纯黑（实测稳定复现），而且原生非客户区
+    无法透明，跟主面板的玻璃风格天然对不上。自绘标题栏既躲开这个 OS 合成问题，
+    也让窗口名与面板一样落在透明玻璃面上。
 
     单独立一个函数而不是让调用方去替换 app_qss() 的字符串：字符串替换一旦
     改动上面的模板就静默失效，属于易碎写法。
@@ -484,10 +500,30 @@ def dialog_qss(mode: str = "opaque", bg_override: str | None = None) -> str:
     bg = "transparent" if mode == "glass" else (bg_override or BG_BASE)
     return app_qss() + f"""
 QDialog, QWidget#glassDialog {{
+    background: transparent;
+    border: none;
+}}
+QWidget#glassDialogSurface {{
     background: {bg};
+    border: 1px solid {STROKE};
+    border-radius: {R_PANEL}px;
+}}
+QWidget#glassTitleBar {{
+    background: transparent;
+    border: none;
+}}
+QLabel#glassTitleLabel {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    font-size: {fs(FS_BASE)}px;
+    font-weight: 600;
+}}
+QSizeGrip {{
+    background: transparent;
+    width: 16px;
+    height: 16px;
 }}
 """
-
 
 def menu_qss(mode: str = "opaque") -> str:
     """弹窗菜单底板样式。两态与 `ui.menu.GlassMenu` 的状态一一对应：

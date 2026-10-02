@@ -57,6 +57,15 @@ def _draw_stats(p: QPainter, color: QColor) -> None:
         p.drawRoundedRect(QRectF(cx - 1.75, top, 3.5, bottom - top), 1.2, 1.2)
 
 
+def _draw_close(p: QPainter, color: QColor) -> None:
+    """关闭：两条对角线组成的叉。"""
+    pen = QPen(color, _STROKE)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.drawLine(QPointF(7.2, 7.2), QPointF(16.8, 16.8))
+    p.drawLine(QPointF(16.8, 7.2), QPointF(7.2, 16.8))
+
+
 def _draw_qr(p: QPainter, color: QColor) -> None:
     """二维码：三个定位图案 + 右下数据点。"""
     pen = QPen(color, 1.7)
@@ -82,6 +91,7 @@ _DRAWERS = {
     "more": _draw_more,
     "stats": _draw_stats,
     "qr": _draw_qr,
+    "close": _draw_close,
 }
 
 

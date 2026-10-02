@@ -32,6 +32,10 @@ import sys
 from ctypes import wintypes
 from typing import NamedTuple
 
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QPainter, QPainterPath
+from PySide6.QtWidgets import QWidget
+
 _IS_WINDOWS = sys.platform == "win32"
 
 # ---- DWM 属性常量 ----
@@ -359,23 +363,58 @@ _MOVE_SETTLE_MS = 260   # 最后一次移动/缩放过去多久之后恢复硬�
 _ARM_DELAY_MS = 450     # 开窗落位后多久才启用移动期让路（否则开窗时会闪一下）
 
 
+class _GlassDialogSurface(QWidget):
+    """对话框自己的玻璃底板。
+
+    对话框不能像普通 QWidget 那样直接在 self 上画 QSS 背景：顶层窗口设了
+    `WA_TranslucentBackground` + `FramelessWindowHint` 后，Qt 不会再绘制顶层
+    的 QSS `background`（offscreen 实测 grab() 为全透明）。因此背景单独放一个
+    子控件，原生模糊生效时它透明、降级/移动期它是不透明底色，内容控件照常
+    叠在它上面。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._freeze = None
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+    def set_freeze(self, pixmap) -> None:
+        """设置 / 清除移动期的定格快照。"""
+        self._freeze = pixmap
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        pixmap = self._freeze
+        if pixmap is None:
+            return
+        from . import theme
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        path = QPainterPath()
+        radius = float(theme.R_PANEL)
+        path.addRoundedRect(QRectF(self.rect()), radius, radius)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+
+
 class GlassDialogMixin:
     """给任意 QDialog 提供一致的毛玻璃观感（原生成功则透背景，否则降级）。
+
+    对话框采用 frameless + WA_TranslucentBackground，并使用自绘标题栏：
+    Win10 原生非客户区无法透明，且移动期撤掉 accent 后会被 DWM 画成纯黑；
+    自绘标题栏既避开这个合成问题，也让窗口名与主面板的透明玻璃面一致。
 
     用法：
         class MyDialog(GlassDialogMixin, QDialog):
             def __init__(self):
                 super().__init__()
-                self.setup_glass()     # 内部会设置样式表
+                self.setup_glass()
 
-            # 需要记住窗口位置时（跨次打开 / 跨次启动）：
+            # 需要记住窗口位置时：
                 self.setup_glass(db=db, state_key=window_state.WINDOW_TASK_DIALOG)
-
-    为什么对话框不能只靠 QSS 实现玻璃：原生 Acrylic 需要窗口半透明
-    （边框去掉 + 背景透出），而一旦透明，QSS 的不透明底板又会盖住模糊效果，
-    两者不能同时存在。所以由本 mixin 按"是否真的拿到原生模糊"二选一地决定，
-    并在移动/缩放期间临时撤掉 Acrylic（见上方 Win10 迟滞说明），同时把撤之前
-    拍下的**定格快照**画回窗口，让拖动过程中的玻璃观感不断裂。
     """
 
     def setup_glass(self, db=None, state_key: str = "") -> None:
@@ -384,18 +423,31 @@ class GlassDialogMixin:
         传 `db` + `state_key` 即启用**窗口位置记忆**（见 `ui.window_state`）：
         显示时还原上次的位置，隐藏时记下当前位置。
         """
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import Qt, QTimer
 
         from . import theme
 
         self.setObjectName("glassDialog")
+        # 无边框 + 半透明是原生 Acrylic 能透出来的前提，也让标题区与主面板
+        # 坐在同一层玻璃上。Win10 原生非客户区无法透明，而且移动期撤 accent
+        # 后会被 DWM 画成纯黑，所以对话框不再保留系统标题栏，改自绘。
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # 顶层窗口在部分平台不会绘制自己的 QSS background，所以背景必须由
+        # 一个子控件承担；它也是降级态/移动期定格快照的画布。
+        self._dialog_surface = _GlassDialogSurface(self)
+        self._dialog_surface.setObjectName("glassDialogSurface")
+        self._dialog_surface.lower()
+        self._build_titlebar()
+        if hasattr(self, "setSizeGripEnabled"):
+            self.setSizeGripEnabled(True)   # 无边框后仍保留右下角缩放能力
         # 先按"无原生模糊"着色：即使原生模糊永远失败，观感也一致且文字可读
         self.setStyleSheet(theme.dialog_qss("opaque"))
         # ---- 毛玻璃状态机 ----
         # `_glass_qss_mode` 是**唯一**的底板样式状态（"glass" / "opaque"），不拆成
         # 多个布尔量：第五轮"收回背景消失"就是状态漏组合造成的，用一个变量表示
-        # 可以让非法组合根本无法表达。定格快照是画在对话框自身 paintEvent 上的
-        # 一层，不参与这个状态。
+        # 可以让非法组合根本无法表达。定格快照是画在 `_dialog_surface` 上的一层，
+        # 不参与这个状态。
         self._glass_resolved = False    # 是否已尝试过原生模糊（只做一次）
         self._glass_on = False          # 原生模糊当前是否生效
         self._glass_qss_mode = "opaque"
@@ -413,8 +465,94 @@ class GlassDialogMixin:
         self._state_key = state_key if db is not None else ""
         self._state_restored = False
 
+    def _build_titlebar(self) -> None:
+        """创建自绘标题栏：窗口名 + 关闭按钮，并接管它的拖动。"""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
+
+        from . import theme
+        from .icons import IconButton
+
+        bar = QWidget(self)
+        bar.setObjectName("glassTitleBar")
+        bar.setFixedHeight(theme.DIALOG_TITLEBAR_H)
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(theme.SP_4, 0, theme.SP_2, 0)
+        lay.setSpacing(theme.SP_2)
+
+        self._title_label = QLabel(self.windowTitle(), bar)
+        self._title_label.setObjectName("glassTitleLabel")
+        # 点击标题文字也要能拖动窗口，所以让鼠标事件落到标题栏本身。
+        self._title_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._title_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        lay.addWidget(self._title_label, 1)
+
+        self._close_btn = IconButton("close", box=28, icon=14, parent=bar)
+        self._close_btn.setToolTip("关闭")
+        self._close_btn.clicked.connect(self.close)
+        lay.addWidget(self._close_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._title_bar = bar
+        self._title_drag_pos = None
+        bar.installEventFilter(self)
+        self._title_label.installEventFilter(self)
+
+    def setWindowTitle(self, title: str) -> None:  # noqa: N802
+        """同步系统窗口名与自绘标题文字。"""
+        super().setWindowTitle(title)
+        label = getattr(self, "_title_label", None)
+        if label is not None:
+            label.setText(title)
+
+    def _sync_chrome(self) -> None:
+        """让底板铺满、标题栏贴顶，并给内容布局让出顶部空间。"""
+        surface = getattr(self, "_dialog_surface", None)
+        if surface is not None:
+            surface.setGeometry(0, 0, self.width(), self.height())
+            surface.lower()
+        bar = getattr(self, "_title_bar", None)
+        if bar is None:
+            return
+        bar.setGeometry(0, 0, self.width(), bar.height())
+        bar.raise_()
+        layout = self.layout()
+        if layout is None:
+            return
+        margins = layout.contentsMargins()
+        if margins.top() < bar.height():
+            layout.setContentsMargins(
+                margins.left(), bar.height(), margins.right(), margins.bottom())
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        """拖动自绘标题栏移动窗口（只处理标题区，关闭按钮走自己的点击）。"""
+        title_bar = getattr(self, "_title_bar", None)
+        title_label = getattr(self, "_title_label", None)
+        if obj is title_bar or obj is title_label:
+            from PySide6.QtCore import QEvent, Qt
+
+            et = event.type()
+            if (et == QEvent.Type.MouseButtonPress
+                    and event.button() == Qt.MouseButton.LeftButton):
+                self._title_drag_pos = (
+                    event.globalPosition().toPoint() - self.frameGeometry().topLeft())
+                return True
+            if (et == QEvent.Type.MouseMove
+                    and self._title_drag_pos is not None
+                    and event.buttons() & Qt.MouseButton.LeftButton):
+                self.move(event.globalPosition().toPoint() - self._title_drag_pos)
+                return True
+            if (et == QEvent.Type.MouseButtonRelease
+                    and event.button() == Qt.MouseButton.LeftButton):
+                self._title_drag_pos = None
+                return True
+        return super().eventFilter(obj, event)
+
     def showEvent(self, event) -> None:  # noqa: N802
+        self._sync_chrome()
         super().showEvent(event)
+        self._sync_chrome()
         import time
 
         from . import window_state
@@ -433,9 +571,9 @@ class GlassDialogMixin:
             hwnd = int(self.winId())
         except Exception:
             return
-        apply_dark_titlebar(hwnd)   # 原生标题栏跟随暗色，否则顶部一条白很扎眼
         if apply_glass(hwnd):
-            # 原生模糊已在窗口后方生效 → 底板转透明，让模糊透出来
+            # 原生模糊已在窗口后方生效 → 底板转透明，让系统画的 Acrylic
+            # 真正透出来（与主面板、GlassMenu 同一条路径）。
             self._glass_on = True
             self._apply_dialog_qss("glass")
             self._glass_move_armed = True
@@ -448,23 +586,11 @@ class GlassDialogMixin:
             window_state.remember(self._state_db, self._state_key, self)
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        """画底板；移动期把定格快照铺满客户区。
-
-        画在 `paintEvent` 里（而不是走样式表）是因为 QSS 没法引用一块内存里的
-        pixmap。子控件在此之后绘制，位置与快照里的一致，观感即"静止时的样子"。
-        """
+        """顶层只负责透明；实际底板/定格快照画在 `_dialog_surface`。"""
         super().paintEvent(event)
-        pixmap = self._glass_freeze
-        if pixmap is None:
-            return
-        from PySide6.QtGui import QPainter
-
-        painter = QPainter(self)
-        painter.drawPixmap(0, 0, pixmap)
-        painter.end()
 
     def _apply_dialog_qss(self, mode: str, bg: str | None = None) -> None:
-        """幂等切换底板：transparent（透原生模糊）/ 不透明（自己画底）。
+        """幂等切换底板：透明（透出原生 Acrylic）/ 不透明（自己画底）。
 
         `bg` 是移动期用的底板色（来自定格快照的边缘采样），所以幂等键必须同时
         含颜色——否则"模式没变但颜色该换"会被漏掉。它只是快照之下的兜底：
@@ -488,7 +614,19 @@ class GlassDialogMixin:
             # 快照按物理像素抓的，换算成逻辑尺寸铺满控件
             pixmap.setDevicePixelRatio(self.devicePixelRatioF() or 1.0)
         self._glass_freeze = pixmap
-        self.update()
+        surface = getattr(self, "_dialog_surface", None)
+        if surface is not None:
+            surface.set_freeze(pixmap)
+        else:
+            self.update()
+
+    def _repaint_surface(self) -> None:
+        """同步落地底板重绘（QSS 变更本身是异步的，拖动帧不能等）。"""
+        surface = getattr(self, "_dialog_surface", None)
+        if surface is not None:
+            surface.repaint()
+        else:
+            self.repaint()
 
     def _freeze_stale(self) -> bool:
         """快照尺寸是否已经和当前客户区对不上（拖动中被缩放）。"""
@@ -505,6 +643,7 @@ class GlassDialogMixin:
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._sync_chrome()
         self._throttle_glass(resized=True)
 
     def _throttle_glass(self, *, resized: bool = False) -> None:
@@ -547,7 +686,7 @@ class GlassDialogMixin:
             # 的一帧 —— 对话框会露出窗口底色（黑）。
             self._set_freeze(shot)
             self._apply_dialog_qss("opaque", bg)
-            self.repaint()
+            self._repaint_surface()
             try:
                 suspend(hwnd)
             except Exception:
@@ -576,7 +715,7 @@ class GlassDialogMixin:
             # 远轻于"无背景"。
             self._set_freeze(None)
             self._apply_dialog_qss("glass")
-            self.repaint()
+            self._repaint_surface()
         # 恢复失败 → 保持当前底板与快照：宁可少一层模糊，也不能让底板消失。
         # 把几何基线推到当前值：Windows 的拖动循环退出后还会补投一批 moveEvent，
         # 它们携带的已经是最终几何，跟基线一比就成了"又移动了"——不更新的话刚恢复
