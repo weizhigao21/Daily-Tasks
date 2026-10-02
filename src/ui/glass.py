@@ -225,7 +225,14 @@ def _edge_color(pixels: bytes, width: int, height: int) -> str | None:
     """
     if not pixels or width <= 0 or height <= 0:
         return None
-    xs = [x for x in (_EDGE_INSET, width - _EDGE_INSET - 1) if 0 <= x < width]
+    # 左右各一条 _EDGE_BAND 宽的竖带（不是单列）：带内取中位数才能如注释所说
+    # 抵抗描边、圆角过渡像素的干扰，单列采样一被 1px 描边命中就整体偏色。
+    xs = [x for x in range(_EDGE_INSET, _EDGE_INSET + _EDGE_BAND) if 0 <= x < width]
+    xs += [
+        x
+        for x in range(width - _EDGE_BAND - _EDGE_INSET, width - _EDGE_INSET)
+        if 0 <= x < width
+    ]
     if not xs:
         return None
     samples = []
@@ -551,6 +558,15 @@ class GlassDialogMixin:
         """窗口停止移动后恢复硬模糊，并撤掉定格快照。"""
         if not self._glass_on or self._glass_qss_mode == "glass":
             return      # 未启用原生模糊，或本来就在玻璃态（重复恢复）→ 无事可做
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+
+        if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+            # 拖动中途只是手停下来（鼠标仍按住）：不能恢复模糊，否则 Win10
+            # 迟滞回归，要等下一次 moveEvent 才重新撤掉+重拍快照（还带一次闪烁）。
+            # 延后到松手后的 settle 再恢复。
+            self._glass_settle.start()
+            return
         try:
             hwnd = int(self.winId())
         except Exception:

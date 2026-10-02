@@ -51,6 +51,10 @@ class RegionPicker(QWidget):
 
     # 物理像素 QRect（虚拟桌面坐标） + 框选区域 RGB ndarray
     selected = Signal(QRect, object)
+    # 取消（Esc / 无效框选）。必须显式 emit：picker 无父对象且未设
+    # WA_DeleteOnClose，close() 只隐藏、不销毁，destroyed 永远不会来——
+    # 少了这个信号，pick_region_with_capture 的事件循环就永远退不出去。
+    cancelled = Signal()
 
     def __init__(self, hint: str = "") -> None:
         super().__init__(
@@ -138,6 +142,9 @@ class RegionPicker(QWidget):
             return
         rect = QRect(self._origin, event.position().toPoint()).normalized()
         if rect.width() < 4 or rect.height() < 4:
+            # 无效框选（普通单击）按取消处理：必须 emit 再 close，
+            # 否则 pick_region_with_capture 的 loop 永远退不出去（见 cancelled 注释）
+            self.cancelled.emit()
             self.close()
             return
         dpr = self._dpr
@@ -157,6 +164,8 @@ class RegionPicker(QWidget):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
+            # 同 mouseReleaseEvent 的无效框选路径：emit 是退出事件循环的唯一凭据
+            self.cancelled.emit()
             self.close()
 
 
@@ -172,6 +181,9 @@ def pick_region_with_capture(hint: str = "") -> tuple[QRect, np.ndarray] | None:
         loop.quit()
 
     picker.selected.connect(_on_selected)
+    # 取消路径：picker 无父对象、未设 WA_DeleteOnClose，close() 只隐藏不销毁，
+    # destroyed 永远不来 —— 退出循环只能靠这个显式信号（Esc/无效框选都走它）。
+    picker.cancelled.connect(loop.quit)
     picker.destroyed.connect(loop.quit)
     picker.show()
     picker.raise_()

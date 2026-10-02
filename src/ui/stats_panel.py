@@ -20,6 +20,9 @@ from ..core.scheduler import period_key, streak_days
 from . import theme, window_state
 from .glass import GlassDialogMixin
 
+# 连续天数的回溯窗口：要大于任何真实连击才不被截断（"近30天完成"列仍用 30 天）
+_STREAK_WINDOW_DAYS = 730
+
 
 class StatsPanel(GlassDialogMixin, QDialog):
     def __init__(self, db: TaskDB, parent=None):
@@ -63,7 +66,9 @@ class StatsPanel(GlassDialogMixin, QDialog):
             dates = self.db.completion_dates(task.id, days=30)
             table.setItem(r, 0, QTableWidgetItem(task.name))
             table.setItem(r, 1, QTableWidgetItem(str(len(dates))))
-            table.setItem(r, 2, QTableWidgetItem(str(streak_days(dates, today))))
+            # 连续天数要数完整连击，不能被 30 天统计窗口截断（长连击显示成 30）
+            streak_dates = self.db.completion_dates(task.id, days=_STREAK_WINDOW_DAYS)
+            table.setItem(r, 2, QTableWidgetItem(str(streak_days(streak_dates, today))))
             week_count = len(dates & week_dates)
             table.setItem(r, 3, QTableWidgetItem(str(week_count)))
         layout.addWidget(table)

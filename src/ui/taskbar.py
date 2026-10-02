@@ -787,11 +787,13 @@ class Taskbar(QWidget):
 
     # ---------- 刷新 ----------
     def refresh_all(self) -> None:
+        self._rebuild_rows()
+        self.refresh_statuses()
+
+    def _refresh_date_label(self) -> None:
         now = datetime.now()
         weekday_cn = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[now.weekday()]
         self.date_label.setText(f"{now.strftime('%m-%d')} {weekday_cn}")
-        self._rebuild_rows()
-        self.refresh_statuses()
 
     def _rebuild_rows(self) -> None:
         # 必须立刻解绑父级：deleteLater() 只是排队到下一轮事件循环，
@@ -824,6 +826,8 @@ class Taskbar(QWidget):
             }
 
     def refresh_statuses(self) -> None:
+        # 日期也要跟着 30s 心跳刷新：跨午夜后标题不能停在昨天
+        self._refresh_date_label()
         now = datetime.now()
         for tid, row in self._rows.items():
             task = row["task"]
@@ -905,18 +909,20 @@ class Taskbar(QWidget):
                 self._set_pill(row["status"], _PILL_BUSY)
                 row["btn"].setEnabled(False)
             threading.Thread(
-                target=self._verify_worker, args=(task,), daemon=True
+                target=self._verify_worker, args=(task, pk), daemon=True
             ).start()
         else:
             self.db.mark_completed(task.id, pk, verify_result="manual")
             self.refresh_statuses()
 
-    def _verify_worker(self, task: Task) -> None:
+    def _verify_worker(self, task: Task, period: str) -> None:
         result = verify_task(task)
-        pk = period_key(task, datetime.now())
         ok = False
         if result.ok:
-            ok = self.db.mark_completed(task.id, pk, verify_result="image")
+            # 记到"点完成"时所属的周期：验证只是取证，全屏搜索可能耗时数秒，
+            # 跨过午夜/周界也不能把用户在上一个周期做的事记到新周期头上
+            # （否则旧周期永远差一次、新周期白白多一次）。
+            ok = self.db.mark_completed(task.id, period, verify_result="image")
         self._verify_done.emit(task.id, ok, result.message, result.score)
 
     def _on_verify_done(self, task_id: int, ok: bool, message: str, score: float) -> None:
@@ -1107,7 +1113,8 @@ class Taskbar(QWidget):
             self._occlude_hint = OccludeHint(self)
         self._occlude_hint.show_for(
             self._dock_edge or "right",
-            self._target_screen().geometry(),
+            # availableGeometry：提示条是置顶窗，不能压在系统任务栏上
+            self._target_screen().availableGeometry(),
             self.y() + self.height() // 2,
             self._occlude_thing,
         )
@@ -1169,7 +1176,11 @@ class Taskbar(QWidget):
         self.db.set_setting("dock_edge", edge)
         self.db.set_setting("dock_y", str(max(screen_geo.y(), min(self.y(),
                             screen_geo.y() + screen_geo.height() - self.height()))))
-        target_x, _ = self._docked_positions()
+        # 记住停在哪块屏：副屏停靠重启后要能还原（否则 _target_screen 会按
+        # 默认窗口位置定位到主屏，dock_y 还原到错误的屏上）
+        screen = QApplication.screenAt(screen_geo.center()) or self.screen()
+        self.db.set_setting("dock_screen", screen.name() if screen else "")
+        target_x, _ = self._docked_positions(screen)
         self.move(QPoint(target_x, self.y()))
         self._start_cursor_poll()
 
@@ -1178,6 +1189,7 @@ class Taskbar(QWidget):
         self._dock_expanded = False
         self._manual_hold = False
         self.db.set_setting("dock_edge", "")
+        self.db.set_setting("dock_screen", "")
         self.stop_dock_timers()
         self._cursor_timer.stop()   # 离开停靠态就不必再轮询光标
 
@@ -1191,9 +1203,21 @@ class Taskbar(QWidget):
         return QApplication.screenAt(QPoint(edge_x, self.y() + self.height() // 2)) \
             or QApplication.primaryScreen()
 
-    def _docked_positions(self) -> tuple[int, int]:
-        """返回 (收起位置, 展开位置) 的 x 坐标。"""
-        geo = self._target_screen().geometry()
+    def _screen_by_name(self, name: str):
+        """按 QScreen.name() 找屏（重启后还原副屏停靠用）；找不到返回 None。"""
+        if not name:
+            return None
+        for screen in QApplication.screens():
+            if screen.name() == name:
+                return screen
+        return None
+
+    def _docked_positions(self, screen=None) -> tuple[int, int]:
+        """返回 (收起位置, 展开位置) 的 x 坐标。
+
+        screen 可显式指定（重启还原副屏停靠时用）；缺省按窗口当前位置推断。
+        """
+        geo = (screen or self._target_screen()).geometry()
         if self._dock_edge == "left":
             return geo.x() - self.width() + config.DOCK_STRIP_PX, geo.x()
         return geo.x() + geo.width() - config.DOCK_STRIP_PX, \
@@ -1262,7 +1286,7 @@ class Taskbar(QWidget):
         self._resume_glass()
 
     def _restore_dock(self) -> None:
-        """启动时恢复上次的停靠状态。"""
+        """启动时恢复上次的停靠状态（边缘 + 垂直位置 + 所在屏）。"""
         if self.db.get_setting("autohide") != "1":
             return
         edge = self.db.get_setting("dock_edge")
@@ -1270,8 +1294,21 @@ class Taskbar(QWidget):
             return
         self._dock_edge = edge
         self._dock_expanded = False
-        target_x, _ = self._docked_positions()
-        self.move(QPoint(target_x, self.y()))
+        # 上次停靠的屏（副屏场景；老数据库没有这个键时退回当前位置推断）
+        screen = self._screen_by_name(self.db.get_setting("dock_screen")) \
+            or self._target_screen()
+        geo = screen.geometry()
+        target_x, _ = self._docked_positions(screen)
+        # dock_y 是与 _dock 写入时同一套钳制规则；屏幕布局可能变过，再夹一次
+        y = self.y()
+        raw = self.db.get_setting("dock_y")
+        if raw:
+            try:
+                y = int(raw)
+            except ValueError:
+                pass
+        y = max(geo.y(), min(y, geo.y() + geo.height() - self.height()))
+        self.move(QPoint(target_x, y))
         self._start_cursor_poll()
 
     def stop_dock_timers(self) -> None:

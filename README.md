@@ -8,6 +8,7 @@ Windows 桌面悬浮任务栏：每日/每周任务管理 + **屏幕识别自动
 
 - **原生毛玻璃**：按 Win11 22H2 `Acrylic` → Win11 21H2 `Mica` → Win10 1803+ `SetWindowCompositionAttribute` 顺序尝试，**只依赖 ctypes**、不引入第三方库；任意一步失败自动降级为自绘半透明玻璃，任何环境都有玻璃观感（主面板、任务编辑、统计面板、二维码结果窗、快捷键设置窗五处一致；托盘 / 卡片右键菜单也走同一支后端，见下）。
 - **右键菜单同款观感**：菜单是**独立顶层窗口**，不在面板那棵样式树里，没人管就是系统默认浅色。托盘菜单、托盘「二维码」子菜单、卡片「更多」菜单统一走 `ui/menu.py::GlassMenu`：配色取 `theme.menu_qss()`（单一来源 `BG_MENU`），并在**每次弹出**时把主面板那套原生 Acrylic 挂到弹窗窗柄上、底板转透明。⚠️ 必须每次重挂 —— Qt 的 Popup 窗口隐藏即销毁，下次显示是新的 HWND，子菜单又是另一个弹窗；拿"已经挂过"当缓存会让菜单永远停在降级态。
+- **下拉框的箭头也是自绘的**：`QComboBox::down-arrow` 若交给样式表会画成**实心小方块**（Qt 的 QStyleSheetStyle 不实现 CSS 的 box model，「三边 border 拼三角」那套写法不成立）；而只删 `down-arrow`、留着 `::drop-down` 又会让箭头**彻底消失**（样式引擎继续接管绘制、不转发给原生 style）。两条一起删，由 `ui/combo.py::ThemedComboBox` 用 `QProxyStyle` 自绘。同一处还修了弹出列表**圆角外一圈黑色**：那是个独立顶层窗口，必须同时设 `WA_TranslucentBackground` **和** `FramelessWindowHint` 才透得出桌面。详见「已知约束」。
 - **移动窗口时自动让路**：Win10 的 `ACCENT_ENABLE_ACRYLICBLURBEHIND` 有著名的拖动迟滞（见「已知约束」），所以弹窗被移动/缩放期间会临时**撤掉** Acrylic、改由 Qt 补不透明底板顶上（**底板色在撤之前现场采样**，所以拖动前后颜色连得上），停手 260ms 后自动恢复磨砂玻璃。**不要**尝试改用 `ACCENT_ENABLE_BLURBEHIND`（软模糊）来"保住观感"——本机实测它会输出纯白且切不回来，详见「已知约束」。
 - **玻璃卡片式任务行**：46px 圆角卡片（状态圆点 + 名称/周期双行 + 状态胶囊 + 完成/更多按钮），状态升级为 `待完成 / 已完成 / 验证中 / 未命中 0.xx / 已禁用` 五种语义色胶囊。
 - **设计 token 单一来源**：颜色 / 字号 / 间距 / 圆角 / 阴影全部在 `src/ui/theme.py`，禁止各页面硬编码色值；字号随屏幕 DPI 自动微调。
@@ -88,6 +89,7 @@ src/
 └── ui/
     ├── theme.py        # 设计 token 单一来源 + 全局 QSS
     ├── icons.py        # 按钮图标（QPainter 自绘矢量图，不依赖字体）
+    ├── combo.py        # 下拉框（QProxyStyle 自绘箭头 + 弹出列表透明容器）
     ├── glass.py        # Windows 原生毛玻璃后端（Acrylic/Mica，失败降级；移动期撤 Acrylic + 定格快照）
     ├── menu.py         # 弹窗菜单（主 UI 同款配色 + 每次弹出重挂原生 Acrylic）
     ├── window_state.py # 窗口位置记忆（存 settings，还原时做屏幕外夹回）
@@ -102,7 +104,7 @@ src/
     ├── qr_result.py    # 二维码结果窗（自动复制 / 多个切换 / 打开链接）
     ├── stats_panel.py  # 统计面板
     └── version.py      # 版本号（唯一来源）
-tests/                  # pytest + pytest-qt offscreen，370 用例（含 test_theme.py 样式覆盖守卫、test_icons.py 图标字形守卫、test_menu.py 菜单观感守卫、test_stats_panel.py 表头观感守卫）
+tests/                  # pytest + pytest-qt offscreen，381 用例（含 test_theme.py 样式覆盖守卫、test_icons.py 图标字形守卫、test_menu.py 菜单观感守卫、test_stats_panel.py 表头观感守卫、test_combo.py 下拉框箭头与弹出列表守卫、test_region_picker.py 取消路径回归）
 pyproject.toml          # ruff / pytest 配置
 requirements.txt        # 运行依赖
 requirements-dev.txt    # 开发依赖
@@ -111,7 +113,7 @@ requirements-dev.txt    # 开发依赖
 ## 测试与检查
 
 ```bash
-python -m pytest tests -q     # 370 用例（含路径解析、模板生命周期、停靠状态机、遮挡探测、全屏让位判定、真实鼠标命中、毛玻璃移动期定格快照、窗口位置记忆、窗口销毁后的引用清理、二维码解码与通道顺序、链接直开与结果窗像素回归、热键解析/校验/热重载、热键录制与设置窗、扫码接线、样式表覆盖度、图标字形与渲染、标题栏版本号版式与唯一来源、弹窗菜单配色与玻璃重挂、统计面板表头底色与左对齐，以及 mss 兼容层与 Qt 弃用属性/BLURBEHIND/逐像素读取/z-order 走查/Qt 隔离/控件底色/冷门符号码位/裸 QMenu/表头宿主底色静态守卫）
+python -m pytest tests -q     # 381 用例（含路径解析、模板生命周期、停靠状态机、遮挡探测、全屏让位判定、真实鼠标命中、毛玻璃移动期定格快照、窗口位置记忆、窗口销毁后的引用清理、二维码解码与通道顺序、链接直开与结果窗像素回归、热键解析/校验/热重载、热键录制与设置窗、扫码接线、样式表覆盖度、图标字形与渲染、标题栏版本号版式与唯一来源、弹窗菜单配色与玻璃重挂、统计面板表头底色与左对齐、下拉框箭头与弹出列表圆角、取消框选退出与 dock_y 还原回归，以及 mss 兼容层与 Qt 弃用属性/BLURBEHIND/逐像素读取/z-order 走查/Qt 隔离/控件底色/冷门符号码位/裸 QMenu/裸 QComboBox/表头宿主底色静态守卫）
 python -m ruff check src tests
 ```
 
@@ -119,7 +121,7 @@ python -m ruff check src tests
 
 ## 版本
 
-当前 **v0.4.0**（二维码识别 + 可自定义热键、自绘矢量图标、标题栏版本号、右键菜单磨砂玻璃、统计表头修复；v0.3.1 之后的改动已全部落版，见 `CHANGELOG.md`）。**版本号唯一来源是 `src/ui/version.py`**（`config.py` 不再重复定义，避免两处漂移），发版时同步到本文件与 `CHANGELOG.md`。
+当前 **v0.4.1**（下拉框箭头与弹出列表圆角修复，以及取消框选挂死、停靠垂直位置还原、验证跨午夜记错周期、全屏按屏让位、幽灵窗口误判、统计连击截断、标题日期、玻璃采样与拖动恢复、提示条 DPI/任务栏等交互缺陷修复；v0.4.0 之后的改动已全部落版，见 `CHANGELOG.md`）。**版本号唯一来源是 `src/ui/version.py`**（`config.py` 不再重复定义，避免两处漂移），发版时同步到本文件与 `CHANGELOG.md`。
 
 ## 已知约束
 
@@ -136,6 +138,7 @@ python -m ruff check src tests
 - **别用 `ACCENT_ENABLE_BLURBEHIND`（软模糊）替代**：FluentWPF 作者推荐"移动期换软模糊"，思路合理，但**本机 Win10 19041 实测不可用**——在纯白衬底下它输出 `RGB(255,255,255)`（不吃 `GradientColor`，三种 tint 都一样），把窗口整块变成纯白，且随后 `apply_glass()` 也切不回 Acrylic。撤掉系统背景时 Qt 底板必须是**不透明**的。实测数据表在 `src/ui/glass.py` 顶部；`tests/test_screen.py` 有静态守卫钉死这条（防止照网上说法"优化"回去）。
 - **⚠️ Win10 的 Acrylic 不吃窗口区域 → 玻璃态的"四角"本来就是方的，主面板也一样**：`ACCENT_ENABLE_ACRYLICBLURBEHIND` 是一整块**矩形**模糊，`SetWindowRgn` 切了圆角也没用（实测：给弹窗切 10px 圆角后抓真实屏幕，四角仍是模糊色 `#555352`，深色区域包围盒恰好等于整窗矩形）。探针复刻面板结构实测，**面板的深色区域同样等于整窗矩形、角点取到的也是模糊色** —— 我们看到的"圆角面板"其实是方角模糊 + 一圈 Qt 画的 1px 圆角描边。所以菜单也照抄"方角模糊 + 圆角描边"才是与面板一致，**别再用 `SetWindowRgn` 去"修"**（修不动，只会白写一段 ctypes）；真要圆角就得放弃系统模糊自绘定格快照，不值得。
 - **弹窗菜单必须自己管配色与玻璃**：菜单是**独立顶层窗口**，不在任何控件的样式树里（`QMenu` 无父级时尤其如此），没人给它 `setStyleSheet` 就是系统默认浅色。用 `src/ui/menu.py::GlassMenu`，别直接 `QMenu(`（有静态守卫拦）。两个容易漏的点：① 子菜单是**另一个独立弹窗**，`addMenu("二维码")` 建出来的是普通 QMenu，得自己 new 一个 `GlassMenu` 传进去；② Qt 的 Popup 窗口**隐藏即销毁**，下次显示是**新的 HWND**，所以原生模糊必须在**每次 `showEvent`** 重挂，不能照抄主面板的"只做一次"，也别拿 hwnd 当缓存（句柄值会被系统回收复用）。
+- **⚠️ QComboBox 有两处 QSS 管不到的地方，都收在 `src/ui/combo.py`**：① **箭头** —— 别用 `::down-arrow` 的 border 拼三角（画出来是**方块**），也别只删 down-arrow（箭头会**消失**），**两条规则必须一起删**，改由 `QProxyStyle` 自绘（裸 `QComboBox(` 有静态守卫拦）；② **弹出列表的圆角** —— 那是个**独立顶层窗口**（`QComboBoxPrivateContainer`），QSS 只画了里面 QListView 的圆角底板，容器那层矩形没人画就是**纯黑**；只设 `WA_TranslucentBackground` 不够，**必须同时给 `FramelessWindowHint`**。顺带一提：这条容器属性**能扛过 showPopup**（与 `menu.py` 的原生模糊不同，那边必须每次重挂）。
 - **QSS 接管菜单后，置灰项要自己声明颜色**：禁用态不再走系统画法，而兜底那条 `QWidget { color: #FFFFFF }` 是纯白 —— 置灰项会跟可点项长得一模一样（探针抓图确认过）。托盘里「识别到网址显示「打开链接」」在直开开启时正是置灰的，看不出来就等于这个开关读不出状态。规则：`QMenu::item:disabled { color: TEXT_MUTED }`。
 - **对话框底板两态**：`theme.dialog_qss("glass" | "opaque", bg)` 与 `GlassDialogMixin._glass_qss_mode` 一一对应，状态收敛在这一个变量上，别再加布尔量（第五轮"背景消失"就是状态漏组合造成的）。撤背景前必须**先补不透明底板并 `repaint()`**，反序会露窗口黑底。
 - **需要被隐藏的对话框禁用 `exec()`**：hide 会终止模态循环，模态对话框被隐藏后再显示就"自动退出"了（任务编辑框踩过）。所以任务编辑框、二维码结果窗都用 `show()` + `finished`；只有"生命周期内不会被隐藏"的对话框（统计面板、快捷键设置）才用 `exec()`

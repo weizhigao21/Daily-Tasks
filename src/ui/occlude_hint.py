@@ -56,7 +56,7 @@ class OccludeHint(QWidget):
         row.setContentsMargins(12, 9, 14, 9)
         row.setSpacing(8)
         dot = QLabel("●")
-        dot.setStyleSheet(f"color: {theme.WARN}; font-size: 9px;")
+        dot.setStyleSheet(f"color: {theme.WARN}; font-size: {theme.fs(9)}px;")
         row.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
 
         col = QVBoxLayout()
@@ -64,10 +64,10 @@ class OccludeHint(QWidget):
         col.setSpacing(2)
         self._main = QLabel()
         self._main.setStyleSheet(
-            f"color: {theme.TEXT_PRIMARY}; font-size: {theme.FS_SM}px;")
+            f"color: {theme.TEXT_PRIMARY}; font-size: {theme.fs(theme.FS_SM)}px;")
         self._sub = QLabel("停在这里 1 秒仍要显示")
         self._sub.setStyleSheet(
-            f"color: {theme.TEXT_MUTED}; font-size: {theme.FS_XS}px;")
+            f"color: {theme.TEXT_MUTED}; font-size: {theme.fs(theme.FS_XS)}px;")
         col.addWidget(self._main)
         col.addWidget(self._sub)
         row.addLayout(col, 1)
@@ -83,7 +83,9 @@ class OccludeHint(QWidget):
         """贴到 `edge` 那一侧、纵向对齐 `anchor_y`（全是**逻辑**坐标）。
 
         ⚠️ `screen_geo` 必须由调用方给出（面板收了半个身子在屏外，从窗口几何问
-        "在哪块屏"会拿到隔壁那块，见 `Taskbar._target_screen`）。
+        "在哪块屏"会拿到隔壁那块，见 `Taskbar._target_screen`）。请传
+        **availableGeometry()**：提示条是置顶窗口，用完整 geometry() 时会压在
+        系统任务栏上。
         """
         self._main.setText(f"被「{thing}」挡住" if thing else "这里被窗口挡着")
         self.adjustSize()

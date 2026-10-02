@@ -230,10 +230,14 @@ def test_watcher_filters_by_monitor():
     assert w.update(own_monitor=88, own_pid=1) is True
 
 
-def test_watcher_without_monitor_info_does_not_filter():
-    """查不到自己属于哪块屏（返回 0）时不做过滤：宁可显示，不要莫名消失。"""
+def test_watcher_without_monitor_info_prefers_showing():
+    """查不到自己属于哪块屏（返回 0）时判为不让位：宁可显示，不要莫名消失。
+
+    历史缺陷：这里曾退化成"不做按屏过滤"，副屏的全屏应用也会让本屏面板
+    让位——方向与"宁可显示"相反。查不到屏幕时必须保守地不消失。
+    """
     w = fullscreen.FullscreenWatcher(hold=1, probe=lambda: _info(monitor=88))
-    assert w.update(own_monitor=0, own_pid=1) is True
+    assert w.update(own_monitor=0, own_pid=1) is False
 
 
 def test_watcher_swallows_probe_failure():

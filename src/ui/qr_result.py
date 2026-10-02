@@ -13,7 +13,6 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from ..core.qrdecode import QrHit
 from . import theme, window_state
+from .combo import ThemedComboBox
 from .glass import GlassDialogMixin
 
 # 可"打开链接"的内容。只认明确的协议或 www. 开头——扫码结果里混着大段文本时，
@@ -96,7 +96,7 @@ class QrResultDialog(GlassDialogMixin, QDialog):
             f"color: {theme.TEXT_MUTED}; font-size: {theme.fs(theme.FS_XS)}px;")
         layout.addWidget(self.status)
 
-        self.chooser = QComboBox()
+        self.chooser = ThemedComboBox()
         for i, hit in enumerate(self.hits):
             self.chooser.addItem(f"第 {i + 1} 个 · {_preview(hit.text)}", i)
         # 只有一个码时不给选择器，省得把简单事情说复杂。

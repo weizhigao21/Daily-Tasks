@@ -3,7 +3,7 @@
 
 判定是纯函数 + 注入式命中测试，所以这里能全量离屏覆盖；真正的 Win32 调用
 （`root_window_at` / `window_info` / `window_rect`）只做"不抛异常"的冒烟测试，
-真机行为由双进程探针验证（见 CHANGELOG 的"未发布"段）。
+真机行为由双进程探针验证（见 CHANGELOG 的 v0.4.1 段）。
 """
 from pathlib import Path
 

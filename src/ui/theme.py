@@ -295,17 +295,13 @@ QPlainTextEdit:focus, QTextEdit:focus {{
     border-color: {ACCENT};
     background: rgba(0, 0, 0, 0.36);
 }}
-QComboBox::drop-down {{
-    border: none;
-    width: 22px;
-}}
-QComboBox::down-arrow {{
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid {TEXT_SECONDARY};
-    margin-right: 8px;
-}}
+/* ⚠️ 这里**故意没有** `QComboBox::drop-down` / `QComboBox::down-arrow`，别加回来。
+   原因有两层，都是真机实测出来的（详见 combo.py 模块说明）：
+   ① Qt 的 QStyleSheetStyle 不实现 CSS 的 box model，用三个 border 拼三角形的写法
+      在 Qt 里只会画出一个**实心小方块**；
+   ② 更坑的是只要 `::drop-down` 规则存在，样式引擎就接管 CC_ComboBox 的绘制、
+      不再把箭头转发给原生 style —— 于是把 down-arrow 删掉后箭头会**彻底消失**。
+   两条一起删干净，箭头交给 combo.py::ThemedComboBox 用 QProxyStyle 自绘。 */
 QComboBox QAbstractItemView {{
     background: {BG_MENU};
     border: 1px solid {STROKE};

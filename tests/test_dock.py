@@ -89,6 +89,25 @@ def test_toggle_visible_floating_hides(taskbar):
     assert not taskbar.isVisible()
 
 
+def test_restore_dock_vertical_position(taskbar):
+    """重启后停靠态必须还原垂直位置 dock_y。
+
+    历史缺陷：_dock 存了 dock_y 却没有任何地方读它，_restore_dock 只还原
+    边缘，细条每次启动都跳回默认 y，用户停靠的高度被丢掉。
+    """
+    db = taskbar.db
+    db.set_setting("autohide", "1")
+    db.set_setting("dock_edge", "right")
+    db.set_setting("dock_y", "200")
+
+    taskbar._restore_dock()
+
+    assert taskbar._dock_edge == "right"
+    assert taskbar.y() == 200
+    collapsed_x, _ = taskbar._docked_positions()
+    assert taskbar.x() == collapsed_x
+
+
 # ---------- 拖动：内容区按下也能移动窗口（回归） ----------
 def _mouse(etype, gpos):
     from PySide6.QtCore import QPoint, Qt

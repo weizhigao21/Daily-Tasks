@@ -359,11 +359,18 @@ def window_info(hwnd: int) -> HitInfo:
         return HitInfo()
     try:
         cls = ctypes.create_unicode_buffer(_MAX_CLASS_NAME)
-        api.GetClassNameW(wintypes.HWND(hwnd), cls, _MAX_CLASS_NAME)
+        cls_len = api.GetClassNameW(wintypes.HWND(hwnd), cls, _MAX_CLASS_NAME)
+        pid = wintypes.DWORD()
+        # GetWindowThreadProcessId 返回 0 = 句柄已失效。WindowFromPoint 与这里
+        # 之间窗口可能被关掉、HWND 被回收：这些 API 失败时只返回 0、不抛异常，
+        # 不拦住就会拿到空类名/pid=0 的"幽灵窗口"，被 is_blocker 判成挡路，
+        # 面板从此永远让位——正是"莫名不弹"类故障，必须在源头拦掉。
+        if not cls_len or api.GetWindowThreadProcessId(
+            wintypes.HWND(hwnd), ctypes.byref(pid)
+        ) == 0:
+            return HitInfo(hwnd=int(hwnd), ok=False)
         title = ctypes.create_unicode_buffer(_MAX_TITLE)
         api.GetWindowTextW(wintypes.HWND(hwnd), title, _MAX_TITLE)
-        pid = wintypes.DWORD()
-        api.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
         ex_style = int(api.GetWindowLongPtrW(wintypes.HWND(hwnd), _GWL_EXSTYLE)) \
             & 0xFFFFFFFF
         cloaked = ctypes.c_int(0)

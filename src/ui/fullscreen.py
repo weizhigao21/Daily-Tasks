@@ -173,7 +173,9 @@ class FullscreenWatcher:
         """采一次并返回**防抖后**的结论。
 
         `own_monitor` 显式传入可跳过 Win32 查询（测试用）；传 0 表示"分不出是哪块
-        屏"，此时不做按屏过滤——宁可多显示，也不要因为查不到而让面板莫名消失。
+        屏"，此时判为不让位——宁可多显示，也不要因为查不到而让面板莫名消失。
+        （注意：不能退化成"不过滤"：那样副屏的全屏应用也会让本屏面板让位，
+        正是按屏判定要避免的故障，且方向与"宁可显示"相反。）
         """
         if own_monitor is None:
             own_monitor = monitor_for_window(own_hwnd, dock_edge) if own_hwnd else 0
@@ -184,7 +186,8 @@ class FullscreenWatcher:
             info = None     # 探测失败一律当作"没有全屏"：宁可显示，不要消失
         raw = bool(
             info is not None
-            and (not own_monitor or info.monitor == own_monitor)
+            and own_monitor            # 查不到所在屏：不让位（见上方说明）
+            and info.monitor == own_monitor
             and should_yield(info, pid)
         )
         if raw == self._last:

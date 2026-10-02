@@ -8,7 +8,6 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTime
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -32,6 +31,7 @@ from ..core.models import (
     Task,
 )
 from . import theme, window_state
+from .combo import ThemedComboBox
 from .glass import GlassDialogMixin
 from .region_picker import pick_region_hiding_app
 
@@ -66,12 +66,12 @@ class TaskDialog(GlassDialogMixin, QDialog):
         self.name_edit = QLineEdit()
         form.addRow("任务名称", self.name_edit)
 
-        self.type_combo = QComboBox()
+        self.type_combo = ThemedComboBox()
         for t in TASK_TYPES:
             self.type_combo.addItem(TASK_TYPE_NAMES[t], t)
         form.addRow("任务类型", self.type_combo)
 
-        self.verify_combo = QComboBox()
+        self.verify_combo = ThemedComboBox()
         self.verify_combo.addItem("手动点击完成", VERIFY_MANUAL)
         self.verify_combo.addItem("屏幕识别自动验证", VERIFY_IMAGE)
         self.verify_combo.currentIndexChanged.connect(self._refresh_verify_rows)
