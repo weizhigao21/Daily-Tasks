@@ -1,5 +1,41 @@
 # 更新日志
 
+## [v0.4.3] — 2026-10-09 · 框选被系统关闭挂死（高危）· 任务保存原子性 · 句柄/对话框泄漏与一批语义修正
+
+代码复查专项：全量走查 `src/` 后修复 1 个高危、4 个中危、6 个低危，新增 6 条回归用例（**383 → 389**），`ruff` 全绿。
+
+### 框选被系统关闭（Alt+F4 / WM_CLOSE）→ 整个程序「消失」且挂死（高危）
+
+- **症状**：全屏定格框选时按 Alt+F4（或会话注销/关机送来的 WM_CLOSE），程序所有窗口（面板、正在编辑的任务对话框）保持隐藏，进程挂死，只能任务管理器杀掉。
+- **成因**：Esc 与无效框选两条取消路径都显式 `cancelled.emit()` 再 `close()`，但**系统关闭路径只触发 `close()`** —— picker 无父对象、未设 `WA_DeleteOnClose`，`close()` 只隐藏不销毁，`destroyed` 不会来，`pick_region_with_capture` 的 `loop.exec()` 永远退不出去，`pick_region_hiding_app` 的 `finally`（恢复窗口）永不执行。v0.4.1 修的是「Esc/单击取消不 emit」，**当时没意识到 `close()` 本身也是一条收尾路径**。
+- **修法**：`RegionPicker` 新增 `closeEvent` 收尾，配 `_settled` 一次性标志保证 `selected`/`cancelled` 只发一次——任何关闭路径都必然退出事件循环；成功路径改为先 emit 再 close，与「emit 是退出循环的唯一凭据」对称。
+- **守卫**（`tests/test_region_picker.py`，3 条）：`close()` 必须发且只发一次 `cancelled`；Esc 后再 close 不得双发；close 路径端到端能退出嵌套事件循环（带 500ms 兜底防挂死）。
+- ⚠️ **收尾不变量**：picker 的「发信号」与「关窗口」是两件事、两条路径都可能单独走到。**任何新增的退出路径都必须落在收尾口上**（`_cancel()` / `closeEvent` 的 `_settled` 判定），不要各自直接 `close()` 完事。
+
+### 任务保存非原子：校验前就改坏共享对象、先删模板后校验（中危）
+
+- **症状**：编辑任务时弄坏某个字段（如清空名称）→ 提示「无法保存」→ 点**取消**，之后点该任务卡片的「禁用/启用」，**用户点过取消的那套编辑（名称/区域/阈值……）被静默写进数据库**；换过图时旧模板已从磁盘删除、不可恢复。
+- **成因**：`_on_accept` 直接就地改 `self._source` —— 它就是 taskbar 任务列表持有的**共享 Task 对象**；且 `_apply_template` 在 `task.validate()` **之前**就 `copyfile` 覆盖正式模板、`_remove_stale_template` 删除旧模板。校验失败后用户点「取消」，被改坏的共享对象会在下一次 `db.update_task`（全字段 UPDATE，由「禁用/启用」等入口触发）时把作废编辑入库。
+- **修法**：保存改为「副本组装（`dataclasses.replace`）→ 定归属（不动磁盘）→ `validate()` → 落盘 → 提交」两段式（`_plan_template` / `_commit_template` 拆开）。校验失败时共享对象与磁盘模板都保持原样。
+- **顺带修掉暂存模板互踩（中危）**：框选暂存文件名固定 `_pending_template.png`，而编辑对话框是**非模态**的、可同时开多个 —— 后框选者覆盖先框选者的暂存图；先保存者的 `finalize_template` 把暂存文件 `replace()` 走，后保存者静默丢模板；取消后残骸永久残留。改为**每对话框实例** `_pending_{id}.png`，`reject()`（Esc/关窗都走它）只清掉自己的暂存图。
+- **守卫**（`tests/test_ui.py`，2 条）：校验失败后 `_source`、旧模板、新图三者都不许动；两个对话框暂存名必须不同、`reject()` 只删自己的。既有「新任务模板转正」用例的暂存名同步改为实例名。
+
+### 资源与生命周期（中危 ×2）
+
+- **修复 抓屏失败泄漏 GDI 句柄**：`glass.capture_window_surface` 的异常路径把 mss 实例 `_sct = None` 直接丢弃、不 `close()` —— mss 的 GDI 后端**构造时**就持有屏幕 DC、兼容 DC 与位图句柄，只在 `close()` 释放（无 `__del__` 兜底）。该失败路径由「分辨率变化」触发，恰是会反复发生的场景：每次丢弃泄 2 个 DC + 1 个 HBITMAP，长期运行可撞到会话级 GDI 句柄上限（10k），之后全局绘制开始失败。改为丢弃前先 `close()`。
+- **修复 设置窗/统计面板反复打开累积**：`exec()` 的一次性对话框没有销毁机制，每开一次就有一个隐藏 QDialog（连同玻璃层、settle 定时器）作为 Taskbar 子对象活到进程退出。补 `finished → deleteLater`（`.saved` 无任何消费点，exec 后不需要留活口）。
+
+### 语义与判定修正（低危 ×6）
+
+- **验证匹配成功但撞重复周期不再误报**：`_verify_worker` 把 `mark_completed` 的返回值当 `ok` 发出——同周期已有记录（并发行）时匹配明明成功，卡片却显示「未命中 0.93」并变「重试」。验证通过就算完成，重复记录走 `refresh_all` 的已完成态即可。
+- **最大化窗口漏判兜底**：`fullscreen` 的 `maximized` 只看 `GetWindowPlacement.showCmd`（失败时停在 0），与 `minimized` 的 `IsIconic` 双保险不对称。最大化窗口的 DWM 扩展矩形恰好铺满整屏，漏判即「面板永久让位」。补 `IsZoomed`，两个来源任一命中都算最大化。
+- **`glass.suspend()` 撤不掉 Win11 21H2 的 Mica**：21H2 的 Mica 用私有属性 1029 开，公开属性 `DWMWA_SYSTEMBACKDROP_TYPE`（38）在该版本是 `E_INVALIDARG`——原实现只试 38 再退回 `_disable_win10_acrylic`，Mica 根本没被撤掉，状态机「已挂起」与实际不符。改为三种后端各关一遍、谁认谁生效，不依赖「当初是哪种开的」（档位不对称就会漏关）。
+- **统计面板「今日已完成」口径**：原按 `period_key` 判，周/一次性任务的「本周已完成」也被算进「今天」，与文案语义不符。改为只数今天的完成记录。
+- **框选存盘失败不再静默**：`save_image` 返回 False（磁盘满/目录不可写）时原实现什么都不说——区域标签已更新、模板却没存上，保存时才报「必须截取目标模板图」，与「我明明框过了」矛盾。现在明确提示「截取失败，请重新框选」。
+- 删除 `occlusion.py` 里从 fullscreen 复制残留、全项目零引用的 `_WINDOWPLACEMENT` 死代码。
+
+**验证**：`pytest` 383 → 389 例全部通过，`ruff` 全绿。
+
 ## [v0.4.2] — 2026-10-02 · 对话框无边框自绘标题栏 · 移动期黑边/纯色修复
 
 - **修复 统计 / 添加任务等对话框移动时边缘与原生标题栏变黑**：Win10 下 `SetWindowCompositionAttribute(ACCENT_ENABLE_ACRYLICBLURBEHIND)` 在移动期被 `glass.suspend()` 撤掉后，DWM 会把原生标题栏/非客户区画成纯黑（真机稳定复现），而且原生标题栏无法透明。所有 `GlassDialogMixin` 对话框改为 `FramelessWindowHint + WA_TranslucentBackground`，使用自绘透明标题栏（窗口名 + 关闭按钮，支持拖动），从合成层面绕开该问题。

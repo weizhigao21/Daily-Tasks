@@ -257,17 +257,6 @@ class BlockerProbe:
 
 
 # ---------- Win32 薄适配层 ----------
-class _WINDOWPLACEMENT(ctypes.Structure):
-    _fields_ = [
-        ("length", ctypes.c_uint),
-        ("flags", ctypes.c_uint),
-        ("showCmd", ctypes.c_uint),
-        ("ptMinPosition", wintypes.POINT),
-        ("ptMaxPosition", wintypes.POINT),
-        ("rcNormalPosition", wintypes.RECT),
-    ]
-
-
 class _Win32:
     """user32 / dwmapi 入口集合，argtypes / restype 只在这里设一次。
 

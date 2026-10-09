@@ -610,7 +610,17 @@ def test_show_settings_stops_and_restores_hotkeys(taskbar, monkeypatch):
     backend = taskbar._hotkeys._backend
     observed = {}
 
+    class _FakeSignal:
+        def connect(self, *_args, **_kw):
+            pass
+
     class _Dlg:
+        def __init__(self):
+            self.finished = _FakeSignal()   # taskbar 会接 finished→deleteLater
+
+        def deleteLater(self):
+            pass
+
         def exec(self):
             observed["handlers_during"] = dict(backend.handlers)
             return 0
@@ -625,7 +635,17 @@ def test_show_settings_stops_and_restores_hotkeys(taskbar, monkeypatch):
 def test_show_settings_restores_hotkeys_even_if_dialog_raises(taskbar, monkeypatch):
     import src.ui.taskbar as taskbar_mod
 
+    class _FakeSignal:
+        def connect(self, *_args, **_kw):
+            pass
+
     class _Dlg:
+        def __init__(self):
+            self.finished = _FakeSignal()   # taskbar 会接 finished→deleteLater
+
+        def deleteLater(self):
+            pass
+
         def exec(self):
             raise RuntimeError("窗口炸了")
 

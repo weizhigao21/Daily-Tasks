@@ -62,3 +62,49 @@ def test_cancelled_quits_event_loop(qtbot):
     loop.exec()
 
     assert not picker.isVisible()
+
+
+def test_system_close_emits_cancelled_once(qtbot):
+    """Alt+F4 / WM_CLOSE / 注销关机只触发 close()，也必须走取消收尾。
+
+    历史缺陷：只有 Esc 与无效框选显式 emit，系统关闭路径 close() 只隐藏不
+    销毁 → loop.exec() 永远退不出去，pick_region_hiding_app 的 finally 不
+    执行，之前隐藏的窗口（面板、任务编辑框）永久保持隐藏，程序看着"消失"了。
+    """
+    picker = _make_picker(qtbot)
+    fired = []
+    picker.cancelled.connect(lambda: fired.append(1))
+
+    picker.close()          # 系统关闭路径
+    assert fired == [1]
+    assert not picker.isVisible()
+
+    picker.close()          # close() 只隐藏不销毁，重复关闭不能再发一次
+    assert fired == [1]
+
+
+def test_cancel_then_close_does_not_double_emit(qtbot):
+    """显式取消（Esc）后再 close，收尾信号不得重复。"""
+    picker = _make_picker(qtbot)
+    fired = []
+    picker.cancelled.connect(lambda: fired.append(1))
+
+    QTest.keyClick(picker, Qt.Key.Key_Escape)
+    picker.close()
+
+    assert fired == [1]
+
+
+def test_system_close_quits_event_loop(qtbot):
+    """端到端：close() 收尾同样要能退出 pick_region_with_capture 的嵌套循环。"""
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    picker = _make_picker(qtbot)
+    loop = QEventLoop()
+    picker.cancelled.connect(loop.quit)
+    QTimer.singleShot(500, loop.quit)   # 兜底，防挂死
+
+    QTimer.singleShot(0, picker.close)
+    loop.exec()
+
+    assert not picker.isVisible()

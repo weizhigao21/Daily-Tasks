@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from ..core.db import TaskDB
 from ..core.models import Task
-from ..core.scheduler import period_key, streak_days
+from ..core.scheduler import streak_days
 from . import theme, window_state
 from .glass import GlassDialogMixin
 
@@ -76,9 +76,11 @@ class StatsPanel(GlassDialogMixin, QDialog):
     def _summary_text(self, tasks: list[Task]) -> str:
         if not tasks:
             return "还没有任务，先添加一个吧。"
-        from datetime import datetime
+        # "今日已完成"只数**今天**的完成记录：周/一次性任务若按 period_key 判，
+        # "本周已完成"也会被算进今天，与文案语义不符
+        today = date.today().isoformat()
         done_today = sum(
             1 for t in tasks
-            if t.enabled and self.db.is_completed(t.id, period_key(t, datetime.now()))
+            if t.enabled and today in self.db.completion_dates(t.id, days=1)
         )
         return f"共 {len(tasks)} 个任务，今日已完成 {done_today} 个。"

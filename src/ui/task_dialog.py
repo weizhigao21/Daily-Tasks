@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTime
@@ -169,12 +170,16 @@ class TaskDialog(GlassDialogMixin, QDialog):
         self.region_label.setText(
             f"{rect.x()},{rect.y()} {rect.width()}x{rect.height()}"
         )
-        pending = config.TEMPLATE_DIR / "_pending_template.png"
+        pending = self._staging_template()
         from ..core.matcher import save_image
 
         if save_image(str(pending), crop):
             self._pending_template = pending
             self.tmpl_label.setText("已截取（保存时生效）")
+        else:
+            # 磁盘满/目录不可写时静默跳过会与"我明明框过了"矛盾，
+            # 保存时才报"必须截取目标模板图"很难排查
+            self.tmpl_label.setText("截取失败，请重新框选")
 
     def _choose_template_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择模板图片", "", "图片 (*.png *.jpg *.bmp)")
@@ -184,11 +189,15 @@ class TaskDialog(GlassDialogMixin, QDialog):
 
     # ---------- 模板文件生命周期 ----------
     def _staging_template(self) -> Path:
-        """框选产生的临时帧（未入库任务的暂存模板）。"""
-        return config.TEMPLATE_DIR / "_pending_template.png"
+        """框选产生的临时帧（未入库任务的暂存模板）。
 
-    @staticmethod
-    def _template_dest(task: Task) -> Path:
+        **每个对话框实例一个文件名**：对话框是非模态的，可以同时开多个，
+        固定文件名会让后框选者覆盖先框选者的暂存图、或把别人的暂存图
+        `replace()` 走（先保存的那方），互相踩掉对方的模板。
+        """
+        return config.TEMPLATE_DIR / f"_pending_{id(self):x}.png"
+
+    def _template_dest(self, task: Task) -> Path:
         """正式模板路径：已入库任务固定为 task_{id}.png。
 
         不能再用 hash(name) 命名——Python 的 str hash 每进程随机化，
@@ -196,7 +205,7 @@ class TaskDialog(GlassDialogMixin, QDialog):
         """
         if task.id is not None:
             return config.TEMPLATE_DIR / f"task_{task.id}.png"
-        return config.TEMPLATE_DIR / "_pending_template.png"
+        return self._staging_template()
 
     @staticmethod
     def _to_stored(path: str) -> str:
@@ -211,27 +220,39 @@ class TaskDialog(GlassDialogMixin, QDialog):
             return p.name
         return str(p)
 
-    def _apply_template(self, task: Task) -> None:
-        """把待定模板落到正式路径，并清掉旧的/临时的中间文件。"""
-        staging = self._staging_template()
-        pending = self._pending_template
-        old = self._source.template_path if self._source else ""
+    def _plan_template(self, task: Task) -> Path | None:
+        """确定模板归属并写进 task.template_path，**不动磁盘**。
 
+        返回"保存时需要落盘的目标路径"，None 表示未换图（沿用原模板）。
+        与 `_commit_template` 拆成两步是保存原子性的一部分：`task.validate()`
+        必须在任何文件操作之前跑完，校验失败时磁盘与 `self._source` 都不能被动过。
+        """
+        pending = self._pending_template
         if pending is None or not pending.exists():
             # 未换图：沿用原模板（顺带把历史绝对路径规范成文件名）
             if task.id is not None and self._source is not None:
                 task.template_path = self._to_stored(self._source.template_path)
-            return
-
+            return None
         dest = self._template_dest(task)
+        task.template_path = self._to_stored(str(dest))
+        return dest
+
+    def _commit_template(self, dest: Path | None) -> None:
+        """把待定模板落到正式路径，并清掉旧的/临时的中间文件。
+
+        只允许在 `task.validate()` 通过之后调用（见 `_plan_template`）。
+        """
+        if dest is None:
+            return
+        staging = self._staging_template()
+        pending = self._pending_template
+        assert pending is not None
         if pending.resolve() != dest.resolve():
             shutil.copyfile(pending, dest)
             if pending == staging:  # 框选临时帧已复制，删除避免堆积
                 staging.unlink(missing_ok=True)
-        task.template_path = self._to_stored(str(dest))
-
         # 清理旧模板文件（换过图后原文件不再被引用）
-        self._remove_stale_template(old, dest)
+        self._remove_stale_template(self._source.template_path if self._source else "", dest)
 
     @staticmethod
     def _remove_stale_template(old: str, new_dest: Path) -> None:
@@ -256,7 +277,7 @@ class TaskDialog(GlassDialogMixin, QDialog):
         if self.task is None or not self.task.template_path:
             return False
         cur = config.resolve_template(self.task.template_path)
-        if cur is None or cur.name != "_pending_template.png" or not cur.exists():
+        if cur is None or not cur.name.startswith("_pending_") or not cur.exists():
             return False
         dest = config.TEMPLATE_DIR / f"task_{task_id}.png"
         try:
@@ -289,7 +310,14 @@ class TaskDialog(GlassDialogMixin, QDialog):
         self.enabled_check.setChecked(task.enabled)
 
     def _on_accept(self) -> None:
-        task = self._source or Task()
+        """组装 → 校验 → 落盘 → 提交，顺序即正确性。
+
+        ⚠️ 绝不能像旧实现那样就地改 `self._source`：它是 taskbar 任务列表
+        持有的**共享对象**，校验失败后用户点"取消"，被改坏的字段会在之后
+        "禁用/启用"（全字段 UPDATE）时被静默写进数据库。模板文件同理，
+        `validate()` 不过就不能先覆盖/删除磁盘上的模板。
+        """
+        task = replace(self._source) if self._source is not None else Task()
         task.name = self.name_edit.text().strip()
         task.task_type = self.type_combo.currentData()
         task.verify_mode = self.verify_combo.currentData()
@@ -307,12 +335,24 @@ class TaskDialog(GlassDialogMixin, QDialog):
             task.time_start = task.time_end = ""
         task.enabled = self.enabled_check.isChecked()
 
-        # 模板图处理：新截取/新选择的文件 → 落为正式模板（task_{id}.png）
-        self._apply_template(task)
-
+        # 先只定归属（不动磁盘），让 validate 看到最终的 template_path
+        dest = self._plan_template(task)
         errors = task.validate()
         if errors:
             QMessageBox.warning(self, "无法保存", "\n".join(errors))
             return
+        # 校验通过才动磁盘：新截取/新选择的文件 → 落为正式模板（task_{id}.png）
+        self._commit_template(dest)
         self.task = task
         self.accept()
+
+    def reject(self) -> None:
+        """取消 / 关窗：清掉自己框选产生的暂存图，别在 templates 里留残留。
+
+        只删**本实例**的暂存文件：同时开着的其它编辑框各有各的暂存名。
+        """
+        staging = self._staging_template()
+        if self._pending_template == staging:
+            staging.unlink(missing_ok=True)
+            self._pending_template = None
+        super().reject()

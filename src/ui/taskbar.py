@@ -621,6 +621,9 @@ class Taskbar(QWidget):
         self._hotkeys.stop()
         try:
             dlg = SettingsDialog(self.db, self)
+            # 用完即毁：exec 后没有任何状态要消费，不销毁的话每个隐藏对话框
+            # （连同玻璃层、settle 定时器）都会作为 Taskbar 子对象累积到退出
+            dlg.finished.connect(dlg.deleteLater)
             dlg.exec()
         finally:
             self._setup_hotkeys()
@@ -917,13 +920,16 @@ class Taskbar(QWidget):
 
     def _verify_worker(self, task: Task, period: str) -> None:
         result = verify_task(task)
-        ok = False
-        if result.ok:
-            # 记到"点完成"时所属的周期：验证只是取证，全屏搜索可能耗时数秒，
-            # 跨过午夜/周界也不能把用户在上一个周期做的事记到新周期头上
-            # （否则旧周期永远差一次、新周期白白多一次）。
-            ok = self.db.mark_completed(task.id, period, verify_result="image")
-        self._verify_done.emit(task.id, ok, result.message, result.score)
+        if not result.ok:
+            self._verify_done.emit(task.id, False, result.message, result.score)
+            return
+        # 记到"点完成"时所属的周期：验证只是取证，全屏搜索可能耗时数秒，
+        # 跨过午夜/周界也不能把用户在上一个周期做的事记到新周期头上
+        # （否则旧周期永远差一次、新周期白白多一次）。
+        self.db.mark_completed(task.id, period, verify_result="image")
+        # 验证通过就算完成：mark_completed 撞上同周期重复记录（并发行）时
+        # 返回 False，但那也是"任务已完成"，绝不能显示成"未命中 xx"再叫人重试
+        self._verify_done.emit(task.id, True, result.message, result.score)
 
     def _on_verify_done(self, task_id: int, ok: bool, message: str, score: float) -> None:
         self.refresh_all()
@@ -941,7 +947,10 @@ class Taskbar(QWidget):
     def _show_stats(self) -> None:
         if self._refuse_when_picking():
             return
-        StatsPanel(self.db, self).exec()
+        dlg = StatsPanel(self.db, self)
+        # 同设置窗：exec 后即毁，防止反复打开累积隐藏对话框
+        dlg.finished.connect(dlg.deleteLater)
+        dlg.exec()
 
     def _reset_positions(self) -> None:
         """托盘：清掉记住的窗口位置（面板当下不动，下次启动回默认位置）。"""

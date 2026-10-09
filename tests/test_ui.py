@@ -158,7 +158,7 @@ def test_new_task_template_finalized_to_id_name(taskbar, tmp_db):
     dlg.name_edit.setText("图验任务")
     dlg.verify_combo.setCurrentIndex(dlg.verify_combo.findData(VERIFY_IMAGE))
     dlg._region = (0, 0, 200, 100)
-    staging = config.TEMPLATE_DIR / "_pending_template.png"
+    staging = dlg._staging_template()
     staging.write_bytes(b"fake-template")
     dlg._pending_template = staging
     dlg._on_accept()
@@ -216,6 +216,77 @@ def test_edit_task_without_repick_normalizes_path(taskbar, tmp_db):
     assert got.template_path == "pending_keepme_777.png"
     assert legacy.exists(), "未换图不能删原模板"
     assert config.resolve_template(got.template_path) == legacy
+
+
+def test_failed_validation_leaves_source_and_template_intact(taskbar, tmp_db):
+    """保存原子性：校验失败后点取消，共享 Task 对象与磁盘模板都不能被动过。
+
+    历史缺陷：旧实现在 validate() 之前就地改 self._source（taskbar 任务列表
+    持有的共享对象）并覆盖/删除模板文件——校验失败再点"取消"，作废的修改
+    会在之后"禁用/启用"的全字段 UPDATE 时被写进数据库，旧模板已删不可恢复。
+    """
+    from src import config
+
+    old = config.TEMPLATE_DIR / "atomic_keep.png"
+    old.write_bytes(b"old")
+    t = tmp_db.add_task(Task(name="原名", task_type=TASK_DAILY,
+                             verify_mode=VERIFY_IMAGE, region=(0, 0, 10, 10),
+                             template_path=str(old)))
+
+    dlg = TaskDialog(taskbar, t)
+    taskbar._open_task_dialog(dlg)
+    dlg.name_edit.setText("")            # 名称为空 → 校验必失败
+    new = config.TEMPLATE_DIR / "atomic_new.png"
+    new.write_bytes(b"new")
+    dlg._pending_template = new
+    dlg._on_accept()
+
+    assert dlg.task is None, "校验失败不该提交"
+    assert t.name == "原名", "共享 Task 对象不能被未提交的编辑改坏"
+    assert old.exists(), "校验失败不能删旧模板"
+    assert new.exists(), "校验失败不能动新图"
+    dlg.reject()
+
+
+def test_reject_discards_own_staging_only(taskbar):
+    """取消要清掉自己框选的暂存图，但不能碰同时开着的其它对话框的。
+
+    历史缺陷：暂存名固定为 _pending_template.png，非模态多开时互相覆盖、
+    互相 replace 走；取消后残骸永久留在 templates 目录。
+    """
+    a, b = TaskDialog(taskbar), TaskDialog(taskbar)
+    assert a._staging_template() != b._staging_template(), "每个实例要有独立暂存名"
+    a._staging_template().write_bytes(b"a")
+    b._staging_template().write_bytes(b"b")
+    a._pending_template = a._staging_template()
+    b._pending_template = b._staging_template()
+
+    a.reject()
+
+    assert not a._staging_template().exists(), "取消后自己的暂存图应清理"
+    assert b._staging_template().exists(), "别把别人对话框的暂存图一起删了"
+    b._staging_template().unlink()
+
+
+def test_verify_success_not_reported_as_miss_when_period_already_recorded(
+        taskbar, tmp_db, monkeypatch):
+    """验证匹配成功、但周期里已有记录（并发行）时不能显示"未命中/重试"。"""
+    import src.ui.taskbar as taskbar_mod
+    from src.core.verifier import VerifyResult
+
+    t = tmp_db.add_task(Task(name="图验", task_type=TASK_DAILY,
+                             verify_mode=VERIFY_IMAGE, region=(0, 0, 10, 10),
+                             template_path="x.png"))
+    pk = datetime.now().date().isoformat()
+    tmp_db.mark_completed(t.id, pk)      # 先占住周期
+    monkeypatch.setattr(taskbar_mod, "verify_task",
+                        lambda task: VerifyResult(True, 0.93, "匹配成功"))
+
+    got = []
+    taskbar._verify_done.connect(lambda tid, ok, msg, score: got.append(ok))
+    taskbar._verify_worker(t, pk)
+
+    assert got == [True], "匹配成功就算完成，撞重复记录不算失败"
 
 
 # ---------- 毛玻璃对话框：移动期撤 Acrylic（Win10 拖动迟滞） ----------

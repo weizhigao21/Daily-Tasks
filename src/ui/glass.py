@@ -295,7 +295,14 @@ def capture_window_surface(hwnd: int) -> SurfaceShot | None:
         }).raw)
     except Exception:
         # 实例可能已失效（分辨率变化等）：丢掉缓存，下次重建。
+        # ⚠️ 丢之前必须 close()：mss 的 GDI 后端构造时就持有屏幕 DC、兼容
+        # DC 与位图句柄，只在 close() 释放 —— 直接置 None 就是句柄泄漏，
+        # 而"分辨率变化"恰恰是会反复触发本分支的场景。
         global _sct
+        try:
+            _sct.close()
+        except Exception:
+            pass
         _sct = None
         return None
     if len(raw) < width * height * 4:
@@ -732,8 +739,11 @@ def suspend(hwnd: int) -> None:
     """
     if not _IS_WINDOWS or not hwnd:
         return
-    if _dwm_set(hwnd, _DWMWA_SYSTEMBACKDROP_TYPE, _DWMSBT_NONE):
-        return
+    # 三种后端各关一遍、谁认谁生效，不判断"当初是哪种开的"：38 是 Win11
+    # 22H2+ 的公开属性，1029 是 21H2 的私有 Mica 属性（38 在 21H2 是
+    # E_INVALIDARG，管不到它，只走 _disable_win10_acrylic 根本撤不掉 Mica）。
+    _dwm_set(hwnd, _DWMWA_SYSTEMBACKDROP_TYPE, _DWMSBT_NONE)
+    _dwm_set(hwnd, _DWMWA_MICA_EFFECT, 0)
     _disable_win10_acrylic(hwnd)
 
 

@@ -253,6 +253,10 @@ class _Win32:
         self.IsIconic.argtypes = [wintypes.HWND]
         self.IsIconic.restype = wintypes.BOOL
 
+        self.IsZoomed = user32.IsZoomed
+        self.IsZoomed.argtypes = [wintypes.HWND]
+        self.IsZoomed.restype = wintypes.BOOL
+
         self.GetWindowPlacement = user32.GetWindowPlacement
         self.GetWindowPlacement.argtypes = [
             wintypes.HWND, ctypes.POINTER(_WINDOWPLACEMENT)
@@ -383,7 +387,11 @@ def foreground_info() -> ForegroundInfo | None:
             monitor_rect=mon_rect,
             minimized=show_cmd == _SW_SHOWMINIMIZED
             or bool(api.IsIconic(wintypes.HWND(hwnd))),
-            maximized=show_cmd == _SW_SHOWMAXIMIZED,
+            # IsZoomed 兜底与 minimized 的双保险对称：GetWindowPlacement 失败时
+            # show_cmd 停在 0，最大化窗口会被漏判成"真全屏"（其扩展矩形恰好铺满
+            # 整屏）→ 面板永久让位。两个来源任一命中都算最大化。
+            maximized=show_cmd == _SW_SHOWMAXIMIZED
+            or bool(api.IsZoomed(wintypes.HWND(hwnd))),
             work_rect=work_rect,
             # style == 0 意味着取值失败（任何真实窗口都至少有 WS_VISIBLE），
             # 此时按"有标题栏"算 → 不触发伪全屏让位，宁可多显示也不要莫名消失。

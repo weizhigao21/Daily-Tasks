@@ -66,6 +66,9 @@ class RegionPicker(QWidget):
         self._hint = hint
         self._origin = None
         self._current = None
+        # 收尾是否已发过 selected/cancelled。close() 只隐藏不销毁，closeEvent
+        # 与显式取消两条路都可能走到收尾，靠它保证信号只发一次。
+        self._settled = False
 
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         self._dpr = (screen.devicePixelRatio() if screen else 1.0) or 1.0
@@ -142,10 +145,8 @@ class RegionPicker(QWidget):
             return
         rect = QRect(self._origin, event.position().toPoint()).normalized()
         if rect.width() < 4 or rect.height() < 4:
-            # 无效框选（普通单击）按取消处理：必须 emit 再 close，
-            # 否则 pick_region_with_capture 的 loop 永远退不出去（见 cancelled 注释）
-            self.cancelled.emit()
-            self.close()
+            # 无效框选（普通单击）按取消处理
+            self._cancel()
             return
         dpr = self._dpr
         # 本地逻辑像素 -> 虚拟桌面物理像素
@@ -159,14 +160,32 @@ class RegionPicker(QWidget):
         x0 = phys.x() - self._mon["left"]
         y0 = phys.y() - self._mon["top"]
         crop = self._img[y0:y0 + phys.height(), x0:x0 + phys.width()].copy()
-        self.close()
+        # 成功路径同样先 emit 再 close：emit 是退出事件循环的唯一凭据，
+        # close 只负责把遮罩撤掉（顺序反了会先触发 closeEvent 的取消收尾）
+        self._settled = True
         self.selected.emit(phys, crop)
+        self.close()
+
+    def _cancel(self) -> None:
+        """取消收尾：必须显式 emit 再 close（见 cancelled 注释）。"""
+        if not self._settled:
+            self._settled = True
+            self.cancelled.emit()
+        self.close()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
-            # 同 mouseReleaseEvent 的无效框选路径：emit 是退出事件循环的唯一凭据
+            self._cancel()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        # 系统关闭路径（Alt+F4 / WM_CLOSE / 注销关机）只触发 close()，不会走
+        # Esc/无效框选那两条显式取消路 —— 不在这里补 emit，loop.exec() 就永远
+        # 退不出去，pick_region_hiding_app 的 finally 不执行，之前隐藏的窗口
+        # （面板、任务编辑框）永久保持隐藏，整个程序看起来"消失"了。
+        if not self._settled:
+            self._settled = True
             self.cancelled.emit()
-            self.close()
+        super().closeEvent(event)
 
 
 def pick_region_with_capture(hint: str = "") -> tuple[QRect, np.ndarray] | None:

@@ -104,7 +104,7 @@ src/
     ├── qr_result.py    # 二维码结果窗（自动复制 / 多个切换 / 打开链接）
     ├── stats_panel.py  # 统计面板
     └── version.py      # 版本号（唯一来源）
-tests/                  # pytest + pytest-qt offscreen，383 用例（含 test_theme.py 样式覆盖守卫、test_icons.py 图标字形守卫、test_menu.py 菜单观感守卫、test_stats_panel.py 表头观感守卫、test_combo.py 下拉框箭头与弹出列表守卫、test_region_picker.py 取消路径回归）
+tests/                  # pytest + pytest-qt offscreen，389 用例（含 test_theme.py 样式覆盖守卫、test_icons.py 图标字形守卫、test_menu.py 菜单观感守卫、test_stats_panel.py 表头观感守卫、test_combo.py 下拉框箭头与弹出列表守卫、test_region_picker.py 取消路径回归、保存原子性与暂存模板隔离回归）
 pyproject.toml          # ruff / pytest 配置
 requirements.txt        # 运行依赖
 requirements-dev.txt    # 开发依赖
@@ -113,7 +113,7 @@ requirements-dev.txt    # 开发依赖
 ## 测试与检查
 
 ```bash
-python -m pytest tests -q     # 383 用例（含路径解析、模板生命周期、停靠状态机、遮挡探测、全屏让位判定、真实鼠标命中、毛玻璃移动期定格快照、窗口位置记忆、窗口销毁后的引用清理、二维码解码与通道顺序、链接直开与结果窗像素回归、热键解析/校验/热重载、热键录制与设置窗、扫码接线、样式表覆盖度、图标字形与渲染、标题栏版本号版式与唯一来源、弹窗菜单配色与玻璃重挂、统计面板表头底色与左对齐、下拉框箭头与弹出列表圆角、取消框选退出与 dock_y 还原回归，以及 mss 兼容层与 Qt 弃用属性/BLURBEHIND/逐像素读取/z-order 走查/Qt 隔离/控件底色/冷门符号码位/裸 QMenu/裸 QComboBox/表头宿主底色静态守卫）
+python -m pytest tests -q     # 389 用例（含路径解析、模板生命周期、停靠状态机、遮挡探测、全屏让位判定、真实鼠标命中、毛玻璃移动期定格快照、窗口位置记忆、窗口销毁后的引用清理、二维码解码与通道顺序、链接直开与结果窗像素回归、热键解析/校验/热重载、热键录制与设置窗、扫码接线、样式表覆盖度、图标字形与渲染、标题栏版本号版式与唯一来源、弹窗菜单配色与玻璃重挂、统计面板表头底色与左对齐、下拉框箭头与弹出列表圆角、取消框选退出（含 Alt+F4/WM_CLOSE 系统关闭路径）与 dock_y 还原回归、任务保存原子性与暂存模板隔离回归，以及 mss 兼容层与 Qt 弃用属性/BLURBEHIND/逐像素读取/z-order 走查/Qt 隔离/控件底色/冷门符号码位/裸 QMenu/裸 QComboBox/表头宿主底色静态守卫）
 python -m ruff check src tests
 ```
 
@@ -121,10 +121,12 @@ python -m ruff check src tests
 
 ## 版本
 
-当前 **v0.4.2**（对话框无边框自绘标题栏与移动期黑边/纯色修复：统计 / 添加任务等所有 `GlassDialogMixin` 窗口在移动时不再露原生黑标题栏、边缘黑边或纯色底板，静态/移动/停止三态均与主面板玻璃观感一致；v0.4.1 之后的改动已落版，见 `CHANGELOG.md`）。**版本号唯一来源是 `src/ui/version.py`**（`config.py` 不再重复定义，避免两处漂移），发版时同步到本文件与 `CHANGELOG.md`。
+当前 **v0.4.3**（代码复查专项：修复框选被系统关闭（Alt+F4/WM_CLOSE）导致程序「消失」挂死的高危缺陷、任务编辑保存非原子（校验失败后作废编辑仍会入库、旧模板被删）、暂存模板多开互踩、抓屏失败泄漏 GDI 句柄、设置窗/统计面板反复打开累积等一批问题；v0.4.2 之后的改动已落版，见 `CHANGELOG.md`）。**版本号唯一来源是 `src/ui/version.py`**（`config.py` 不再重复定义，避免两处漂移），发版时同步到本文件与 `CHANGELOG.md`。
 
 ## 已知约束
 
+- **⚠️ 框选的收尾信号必须覆盖所有退出路径**：`RegionPicker` 的 `cancelled` 是嵌套事件循环退出的唯一凭据——Esc、无效框选、**以及系统关闭（Alt+F4 / WM_CLOSE / 注销关机）** 三条路都要走到同一个收尾口（`closeEvent` + `_settled` 一次性标志）。只补「用户主动取消」那两条的下场：`close()` 只隐藏不销毁、`destroyed` 不会来，`loop.exec()` 永不返回，恢复窗口的 `finally` 不执行，整个程序「消失」且挂死（v0.4.1 补了 Esc/单击，v0.4.3 才补上系统关闭路径——同一个坑踩了两次）。顺序也固定：**先 emit 再 close**，emit 负责退出循环，close 只负责撤遮罩。
+- **⚠️ 对话框保存必须「先校验、后动磁盘/共享对象」**：编辑对话框手里的 `_source` 是任务列表持有的**共享 Task 对象**，校验前就地改它、或先覆盖/删除模板文件，校验失败再点「取消」就会把作废编辑借道下一次全字段 `update_task` 写进库、旧模板已删不可恢复。正确顺序：组装到**副本**（`dataclasses.replace`）→ `validate()` → 落盘 → 提交。框选暂存模板用**每实例**文件名（对话框非模态、可多开，固定名会互相覆盖/互相 replace 走），`reject()` 只清掉自己的暂存图。
 - 仅支持 Windows（注册表自启、托盘行为、原生毛玻璃 API）
 - 定格截图坐标系为虚拟桌面物理像素，高 DPI 屏已做 DPR 换算
 - 匹配基于灰度模板，目标区域若有大面积动画/主题变色可能影响得分
